@@ -11,7 +11,7 @@ interface VendorDocument {
   processing_status: "UPLOADED" | "EXTRACTED" | "ERROR";
   processed_at: string | null;
   extracted_text?: string | null;
-  metadata?: Record<string, string>;
+  metadata?: Record<string, unknown>;
 }
 
 interface Vendor {
@@ -128,8 +128,10 @@ export default function ResponsesPage() {
           rfxId,
           vendorId: doc.vendor_id,
           documentId: doc.id,
-          contentText: doc.extracted_text || `Document: ${doc.filename} from vendor ${vendor?.name || "Unknown"}`,
-          documentKind: doc.file_type?.includes("image") ? "image" : "text-derived",
+          contentText: doc.extracted_text || "",
+          mediaBase64: typeof doc.metadata?.mediaBase64 === "string" ? doc.metadata.mediaBase64 : undefined,
+          mediaType: doc.file_type,
+          documentKind: doc.file_type === "application/pdf" ? "pdf" : doc.file_type?.startsWith("image/") ? "image" : "text-derived",
           fileName: doc.filename,
         }),
       });
@@ -240,7 +242,7 @@ export default function ResponsesPage() {
             <option value="">Select vendor</option>
             {Object.values(vendors).map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
           </select>
-          <input type="file" accept=".txt,.csv,.json,.md" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} className="max-w-full text-sm" />
+          <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.txt,.csv,.json,.md,.docx,.xlsx,.xls,.xlsm" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} className="max-w-full text-sm" />
           <button onClick={() => void handleUpload()} disabled={uploading || !selectedFile || !selectedVendorId} className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:bg-slate-300">{uploading ? "Uploading..." : "Upload response"}</button>
         </div>
         <p className="mt-2 text-xs text-slate-500">Text and CSV responses are retained for extraction; seeded documents remain available below.</p>
@@ -278,7 +280,7 @@ export default function ResponsesPage() {
                       </span>
                     </td>
                     <td className="px-6 py-3 text-xs text-slate-600">
-                      {doc.metadata?.archetype || "—"}
+                      {typeof doc.metadata?.archetype === "string" ? doc.metadata.archetype : "—"}
                     </td>
                     <td className="px-6 py-3 text-center">
                       {doc.processing_status === "UPLOADED" && (

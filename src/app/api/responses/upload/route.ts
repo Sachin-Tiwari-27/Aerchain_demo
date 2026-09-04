@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { prepareDocument } from "@/procurement/document-preparation";
 
 export async function POST(request: Request) {
   try {
@@ -14,17 +15,22 @@ export async function POST(request: Request) {
 
     if (!supabase) throw new Error("Supabase client not configured");
 
-    const content = await file.text();
+    const prepared = await prepareDocument(file);
     const { data, error } = await supabase
       .from("vendor_documents")
       .insert({
         rfx_id: rfxId,
         vendor_id: vendorId,
         filename: file.name,
-        file_type: file.type || "text/plain",
+        file_type: prepared.mediaType,
         processing_status: "UPLOADED",
-        extracted_text: content,
-        metadata: { uploadedVia: "responses-ui", size: file.size },
+        extracted_text: prepared.contentText || null,
+        metadata: {
+          uploadedVia: "responses-ui",
+          size: prepared.originalSize,
+          documentKind: prepared.documentKind,
+          mediaBase64: prepared.mediaBase64,
+        },
       })
       .select("*")
       .single();

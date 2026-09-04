@@ -28,6 +28,7 @@ export type GenerateStructuredOptions<T> = {
   prompt: string;
   documentKind?: DocumentKind;
   useCase?: UseCase;
+  media?: { mimeType: string; data: string };
   onInvalid?: (result: unknown) => string;
 };
 
@@ -266,7 +267,7 @@ async function callGemini(prompt: string, model: string, documentKind: DocumentK
   return parseJsonPayload(text);
 }
 
-async function callOpenRouter(prompt: string, model: string, provider: "openrouter-primary" | "openrouter-secondary") {
+async function callOpenRouter(prompt: string, model: string, provider: "openrouter-primary" | "openrouter-secondary", media?: { mimeType: string; data: string }) {
   const env = getEnv();
   const apiKey = env.openRouterApiKey;
   if (!apiKey) {
@@ -276,6 +277,13 @@ async function callOpenRouter(prompt: string, model: string, provider: "openrout
   if (!model) {
     throw new Error(`${provider} model is not configured`);
   }
+
+  const userContent = media
+    ? [
+        { type: "text", text: prompt },
+        { type: "image_url", image_url: { url: `data:${media.mimeType};base64,${media.data}` } },
+      ]
+    : prompt;
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -297,7 +305,7 @@ async function callOpenRouter(prompt: string, model: string, provider: "openrout
         },
         {
           role: "user",
-          content: prompt,
+          content: userContent,
         },
       ],
     }),
@@ -318,15 +326,16 @@ async function callProvider(
   prompt: string,
   model: string,
   documentKind: DocumentKind,
+  media?: { mimeType: string; data: string },
 ): Promise<unknown> {
   switch (provider) {
     case "gemini-primary":
     case "gemini-secondary":
-      return callGemini(prompt, model, documentKind);
+      return callGemini(prompt, model, documentKind, media);
     case "openrouter-primary":
-      return callOpenRouter(prompt, model, "openrouter-primary");
+      return callOpenRouter(prompt, model, "openrouter-primary", media);
     case "openrouter-secondary":
-      return callOpenRouter(prompt, model, "openrouter-secondary");
+      return callOpenRouter(prompt, model, "openrouter-secondary", media);
     default:
       throw new Error(`Unsupported provider: ${provider}`);
   }
@@ -337,6 +346,7 @@ export async function generateStructured<T>({
   prompt,
   documentKind = "text-derived",
   useCase = "rfx-json",
+  media,
 }: GenerateStructuredOptions<T>): Promise<StructuredGenerationResult<T>> {
   const chain = getProviderChain(useCase);
   let lastError: unknown;
@@ -348,7 +358,7 @@ export async function generateStructured<T>({
 
     for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
       try {
-        const result = await callProvider(provider, attempts[attemptIndex], model, documentKind);
+        const result = await callProvider(provider, attempts[attemptIndex], model, documentKind, media);
         const parsed = schema.safeParse(result);
 
         if (!parsed.success) {

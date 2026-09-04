@@ -9,7 +9,9 @@ const extractRequestSchema = z.object({
   rfxId: z.string().uuid(),
   vendorId: z.string().uuid(),
   documentId: z.string().uuid(),
-  contentText: z.string(),
+  contentText: z.string().optional().default(""),
+  mediaBase64: z.string().optional(),
+  mediaType: z.string().optional(),
   documentKind: z.enum(["image", "pdf", "text-derived"]).default("text-derived"),
   fileName: z.string(),
 });
@@ -19,7 +21,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     const input = extractRequestSchema.parse(body);
 
-    const prompt = `Extract structured supplier pricing information from the following document.\n\nRules:\n1. Distinguish explicit (directly stated), derived (calculated/inferred), ambiguous (unclear), and missing prices.\n2. Keep only seller-supplied values; do not invent values.\n3. For each quote, record: SKU reference, description, price, unit, currency, conditions, confidence score, and source reference.\n4. If a price is not directly stated, use null and record the reason in exceptions.\n5. Return JSON matching the vendor extraction schema.\n\nDocument content:\n${input.contentText}`;
+    const prompt = `Extract structured supplier pricing information from the following document.\n\nRules:\n1. Distinguish explicit (directly stated), derived (calculated/inferred), ambiguous (unclear), and missing prices.\n2. Keep only seller-supplied values; do not invent values.\n3. For each quote, record: SKU reference, description, price, unit, currency, conditions, confidence score, and source reference.\n4. If a price is not directly stated, use null and record the reason in exceptions.\n5. Return JSON matching the vendor extraction schema.\n\nDocument content:\n${input.contentText || (input.mediaBase64 ? "Inspect the attached binary document directly." : "(empty document)")}`;
 
     // Call the provider abstraction
     const result = await generateStructured({
@@ -27,6 +29,9 @@ export async function POST(req: Request) {
       prompt,
       documentKind: input.documentKind,
       useCase: input.documentKind === "text-derived" ? "rfx-json" : "image-parse",
+      media: input.mediaBase64 && input.mediaType
+        ? { mimeType: input.mediaType, data: input.mediaBase64 }
+        : undefined,
     });
 
     // Store the extraction in vendor_responses

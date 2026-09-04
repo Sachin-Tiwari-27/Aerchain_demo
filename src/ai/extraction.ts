@@ -60,13 +60,16 @@ Rules for extraction:
 - Use empty arrays for missing questionnaire/commercial terms, not null.
 
 DOCUMENT CONTENT:
-${input.contentText || "(no content provided)"}`;
+${input.contentText || (input.imageBase64 ? "The document is attached as binary media. Inspect it directly." : "(no content provided)")}`;
 
   const result = await generateStructured({
     schema: vendorQuoteExtractionSchema,
     prompt,
     documentKind: input.documentKind,
     useCase,
+    media: input.imageBase64 && input.mediaType
+      ? { mimeType: input.mediaType, data: input.imageBase64 }
+      : undefined,
   });
 
   // Fallback: if vendor is null or empty, try to extract from document content
