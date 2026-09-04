@@ -1,0 +1,20 @@
+{
+  "generatedAt": "2026-09-03T14:40:14.211Z",
+  "rfx": {
+    "id": "32bc7e4b-4429-4596-80a3-e91edd30b1cf",
+    "name": "2026 India Corrugated Packaging Rate Contract",
+    "category": "Corrugated Packaging",
+    "description": "Annual corrugated packaging rate contract for e-commerce and industrial shipping needs across India.",
+    "status": "DRAFT",
+    "currency": "INR",
+    "max_lead_time_days": 21,
+    "max_vendor_share": 0.7,
+    "minimum_awarded_vendors": 2
+  },
+  "skuCount": 30,
+  "vendorCount": 5,
+  "questionnaireCount": 8,
+  "currentContractPriceCount": 30,
+  "vendorDocumentCount": 5,
+  "summary": "Seed data generated for one RFx and a corrugated packaging catalog with 5 vendor documents (Milestone 4)."
+}
