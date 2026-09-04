@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS vendor_quotes (
   conversion_rate NUMERIC,
   mapping_status TEXT NOT NULL DEFAULT 'UNMAPPED',
   validation_status TEXT NOT NULL DEFAULT 'REVIEW',
+  failure_reason TEXT,
   confidence NUMERIC,
   source_document_id UUID REFERENCES vendor_documents(id) ON DELETE SET NULL,
   source_reference TEXT,

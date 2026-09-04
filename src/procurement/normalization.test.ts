@@ -215,3 +215,33 @@ test("parseUnitFactor resolves compound units into base unit + factor", () => {
   assert.equal(parseUnitFactor(""), null);
   assert.equal(parseUnitFactor(null), null);
 });
+
+test("fails only mismatched specification lines and retains the vendor's eligible lines", async () => {
+  const result = await processExtractedQuotes({
+    vendorId: "vendor-1",
+    vendorResponseId: "response-1",
+    rfxId: "rfx-1",
+    extraction: {
+      vendor: "Spec Vendor",
+      lead_time_days: 7,
+      quotes: [
+        { sku_reference: "CP-011", price: 10, unit: "pcs", currency: "INR", ply: 3, gsm: 180, length_mm: 200, width_mm: 150, height_mm: 100, conditions: null, confidence: null },
+        { sku_reference: "CP-012", price: 11, unit: "pcs", currency: "INR", ply: 5, gsm: 200, conditions: null, confidence: null },
+      ],
+      questionnaire_answers: [],
+      commercial_terms: [],
+      exceptions: [],
+    },
+    lineItems: [
+      { id: "line-11", rfx_id: "rfx-1", sku: "CP-011", annual_quantity: 100, ply: 5, gsm: 180, length_mm: 200, width_mm: 150, height_mm: 100 },
+      { id: "line-12", rfx_id: "rfx-1", sku: "CP-012", annual_quantity: 100, ply: 5, gsm: 200 },
+    ],
+  });
+
+  assert.equal(result.processedQuotes[0].validationStatus, "FAILED");
+  assert.equal(result.processedQuotes[0].normalizedPrice, null);
+  assert.equal(result.processedQuotes[0].failureReason, "CP-011: ply: required 5-ply, quoted 3-ply");
+  assert.equal(result.processedQuotes[1].validationStatus, "VALID");
+  assert.equal(result.qualificationStatus, "QUALIFIED_WITH_EXCEPTIONS");
+  assert.equal(result.issues.some((issue) => issue.issueType === "MANDATORY_SPEC_MISMATCH"), true);
+});
