@@ -54,7 +54,8 @@ test("puts suppliers with no extracted quote rows into review", async () => {
   });
 
   assert.equal(result.qualificationStatus, "REVIEW");
-  assert.equal(result.processedQuotes.length, 0);
+  assert.equal(result.processedQuotes.length, 1);
+  assert.equal(result.processedQuotes[0].validationStatus, "MISSING");
   assert.equal(result.issues.some((issue) => issue.issueType === "NO_QUOTES"), true);
 });
 
@@ -295,4 +296,62 @@ test("fails only mismatched specification lines and retains the vendor's eligibl
   assert.equal(result.processedQuotes[1].validationStatus, "VALID");
   assert.equal(result.qualificationStatus, "QUALIFIED_WITH_EXCEPTIONS");
   assert.equal(result.issues.some((issue) => issue.issueType === "MANDATORY_SPEC_MISMATCH"), true);
+});
+
+test("handles complete, partial, vague, mixed-unit, and late vendor response fixtures conservatively", async () => {
+  const lines = [
+    { id: "1", rfx_id: "rfx", sku: "CP-001", description: "3-ply mailer box", unit: "pcs", annual_quantity: 15000, ply: 3 },
+    { id: "2", rfx_id: "rfx", sku: "CP-002", description: "3-ply shipping carton", unit: "pcs", annual_quantity: 15325, ply: 3 },
+    { id: "3", rfx_id: "rfx", sku: "CP-003", description: "5-ply export box", unit: "pcs", annual_quantity: 15650, ply: 5 },
+    { id: "11", rfx_id: "rfx", sku: "CP-011", description: "5-ply bottle shipper", unit: "pcs", annual_quantity: 18250, ply: 5 },
+  ];
+  const base = { vendorId: "vendor", vendorResponseId: "response", rfxId: "rfx", rfxCurrency: "INR", lineItems: lines };
+  const emptyAnswers = { questionnaire_answers: [], commercial_terms: [], exceptions: [] };
+
+  const clean = await processExtractedQuotes({ ...base, extraction: {
+    vendor: "A", lead_time_days: 10, ...emptyAnswers,
+    quotes: lines.map((line) => ({ sku_reference: line.sku, description: line.description, price: 10, unit: "per piece", currency: "INR", ply: line.ply, conditions: null, confidence: null })),
+  } });
+  assert.equal(clean.qualificationStatus, "QUALIFIED");
+  assert.equal(clean.processedQuotes.every((quote) => quote.validationStatus === "VALID"), true);
+
+  const partialWithWrongPly = await processExtractedQuotes({ ...base, extraction: {
+    vendor: "B", lead_time_days: 12, ...emptyAnswers,
+    quotes: [
+      { sku_reference: "CP-001", price: 12.9, unit: "pc", currency: "INR", ply: 3, conditions: null, confidence: null },
+      { sku_reference: "CP-011", price: 14.9, unit: "pc", currency: "INR", ply: 3, conditions: null, confidence: null },
+    ],
+  } });
+  assert.equal(partialWithWrongPly.processedQuotes.find((quote) => quote.sku === "CP-011")?.validationStatus, "FAILED");
+  assert.equal(partialWithWrongPly.processedQuotes.filter((quote) => quote.validationStatus === "MISSING").length, 2);
+  assert.equal(partialWithWrongPly.qualificationStatus, "QUALIFIED_WITH_EXCEPTIONS");
+
+  const mixedUnits = await processExtractedQuotes({ ...base, extraction: {
+    vendor: "D", lead_time_days: null, ...emptyAnswers,
+    quotes: [
+      { sku_reference: "CP-001", price: 42, unit: "kg", currency: "INR", ply: 3, conditions: null, confidence: null },
+      { sku_reference: "CP-002", price: 0.28, unit: "unit", currency: "USD", ply: 3, conditions: null, confidence: null },
+      { sku_reference: "CP-003", price: 1850, unit: "100 pcs", currency: "INR", ply: 5, conditions: null, confidence: null },
+      { description: "standard box medium", price: 15.5, unit: "each", currency: "INR", conditions: null, confidence: null },
+    ],
+  } });
+  assert.equal(mixedUnits.processedQuotes.find((quote) => quote.sku === "CP-001")?.validationStatus, "AMBIGUOUS");
+  assert.equal(mixedUnits.processedQuotes.find((quote) => quote.sku === "CP-003")?.normalizedPrice, 18.5);
+  assert.equal(mixedUnits.issues.some((issue) => issue.issueType === "SKU_MAPPING_AMBIGUOUS"), true);
+  assert.equal(mixedUnits.qualificationStatus, "REVIEW");
+
+  const narrativeRange = await processExtractedQuotes({ ...base, extraction: {
+    vendor: "C", lead_time_days: null, ...emptyAnswers,
+    quotes: [{ sku_reference: "CP-001", price: 13, unit: "pc", currency: "INR", ply: 3, price_type: "ambiguous", conditions: null, confidence: null }],
+  } });
+  assert.equal(narrativeRange.processedQuotes.find((quote) => quote.sku === "CP-001")?.normalizedPrice, null);
+  assert.equal(narrativeRange.processedQuotes.find((quote) => quote.sku === "CP-001")?.validationStatus, "AMBIGUOUS");
+  assert.equal(narrativeRange.qualificationStatus, "REVIEW");
+
+  const lateRateCard = await processExtractedQuotes({ ...base, extraction: {
+    vendor: "E", lead_time_days: 30, ...emptyAnswers,
+    quotes: [{ sku_reference: "CP-001", price: 11.8, unit: "pc", currency: "INR", ply: 3, conditions: null, confidence: null }],
+  } });
+  assert.equal(lateRateCard.qualificationStatus, "FAILED");
+  assert.equal(lateRateCard.issues.some((issue) => issue.issueType === "LEAD_TIME"), true);
 });

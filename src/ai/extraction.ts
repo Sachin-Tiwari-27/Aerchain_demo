@@ -155,7 +155,7 @@ CRITICAL REQUIREMENTS:
 3. QUOTES ARRAY: Extract each quote/line item with these fields:
    - sku_reference: The SKU code or part number from the quote (e.g., "CP-001", "SKU-123"). Required.
    - description: The product description from the quote (e.g., "Small D2C Shipping Box"). Required.
-   - price: The unit price as a number (e.g., 8.50). Use null if missing.
+   - price: The unit price as a number (e.g., 8.50). Use null if missing, a range, an approximation, conditional, or a prior-year reference.
    - unit: The unit of measurement (e.g., "piece", "kg", "meter"). Required.
    - currency: The currency code (e.g., "INR", "USD", "EUR"). Required.
    - moq: Minimum order quantity as a number (e.g., 5000). Use null if not stated.
@@ -168,7 +168,10 @@ CRITICAL REQUIREMENTS:
 Rules for extraction:
 - Return a single JSON object at the top level. Do not return an array.
 - The object must contain exactly these keys: vendor, lead_time_days, quotes, questionnaire_answers, commercial_terms, exceptions.
-- Distinguish explicit, derived, ambiguous, and missing prices.
+- Distinguish explicit, derived, ambiguous, and missing prices using price_type. A price range shared by multiple products is ambiguous for every product; do not allocate or average it. Do not turn a rebate, freight charge, or other commercial term into a SKU price.
+- Preserve the quoted unit basis exactly, including quantities such as "100 pcs" and mass units such as "kg". Do not invent a mass-per-piece basis.
+- Do not map a vague description to an RFx SKU when multiple items could match; retain it as an unmapped exception instead.
+- Only provide lead_time_days for an explicit, unqualified day count. Phrases such as "around two weeks" or "within the RFx range" must produce null and an exception.
 - Keep only seller-supplied values; do not invent SKU codes or descriptions.
 - If any required field is missing, use null and record the reason in exceptions.
 - For SKU references, keep the supplier's exact wording (do not normalize or abbreviate).
