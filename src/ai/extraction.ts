@@ -2,8 +2,50 @@ import { z } from "zod";
 
 import { generateStructured, type DocumentKind, type UseCase } from "@/ai/provider";
 
+const supplierShape = z.union([
+  z.string(),
+  z.object({
+    name: z.string().optional(),
+    contact: z.string().nullable().optional(),
+    address: z.string().nullable().optional(),
+  }).passthrough(),
+  z.null(),
+]);
+
+const conditionsShape = z.union([
+  z.string(),
+  z.array(z.string()),
+  z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+  z.null(),
+]);
+
+function flattenConditions(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.filter((entry) => typeof entry === "string").join(" | ") || null;
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== null && entry !== undefined && entry !== "")
+      .map(([key, entry]) => `${key}: ${typeof entry === "string" ? entry : JSON.stringify(entry)}`);
+    return entries.length > 0 ? entries.join(" | ") : null;
+  }
+  return null;
+}
+
+function flattenSupplier(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.name === "string" && record.name.length > 0) return record.name;
+  }
+  return "Unknown Vendor";
+}
+
 export const vendorQuoteExtractionSchema = z.object({
-  vendor: z.string().min(1),
+  vendor: z.string().min(1).optional(),
+  vendor_name: z.string().min(1).optional(),
+  supplier: supplierShape.optional(),
+  lead_time: z.string().nullable().optional(),
   lead_time_days: z.number().nullable().optional(),
   quotes: z.array(
     z.object({
@@ -14,16 +56,67 @@ export const vendorQuoteExtractionSchema = z.object({
       currency: z.string().nullable().optional(),
       moq: z.number().nullable().optional(),
       moq_unit: z.string().nullable().optional(),
-      conditions: z.string().nullable().optional(),
+      conditions: conditionsShape.optional(),
       confidence: z.number().min(0).max(1).nullable().optional(),
+      confidence_score: z.number().min(0).max(1).nullable().optional(),
       source_reference: z.string().nullable().optional(),
       price_type: z.enum(["explicit", "derived", "ambiguous", "missing"]).optional(),
-    }),
+      price_status: z.enum(["explicit", "derived", "ambiguous", "missing"]).optional(),
+    }).passthrough(),
   ),
   questionnaire_answers: z.array(z.any()).default([]),
   commercial_terms: z.array(z.any()).default([]),
   exceptions: z.array(z.any()).default([]),
-});
+}).transform((value) => ({
+  ...value,
+  vendor:
+    (value.vendor && value.vendor.length > 0 && value.vendor) ||
+    (value.vendor_name && value.vendor_name.length > 0 && value.vendor_name) ||
+    flattenSupplier(value.supplier),
+  lead_time_days:
+    typeof value.lead_time_days === "number"
+      ? value.lead_time_days
+      : parseLeadTimeString(value.lead_time) ??
+        extractLeadTimeFromConditions(value.quotes?.[0]?.conditions) ??
+        null,
+  quotes: value.quotes.map((quote) => ({
+    ...quote,
+    conditions: flattenConditions(quote.conditions),
+    confidence: quote.confidence ?? quote.confidence_score ?? null,
+  })),
+}));
+
+function parseLeadTimeString(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const match = value.match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : null;
+}
+
+function extractLeadTimeFromConditions(conditions: unknown): number | null {
+  if (!conditions) return null;
+  if (typeof conditions === "string") {
+    const match = conditions.match(/(\d+)\s*(?:day|days|weeks?|months?)/i);
+    return match ? Number(match[1]) : null;
+  }
+  if (Array.isArray(conditions)) {
+    for (const entry of conditions) {
+      const value = extractLeadTimeFromConditions(entry);
+      if (value !== null) return value;
+    }
+    return null;
+  }
+  if (typeof conditions === "object") {
+    const record = conditions as Record<string, unknown>;
+    const leadTime = record.lead_time ?? record.leadTime;
+    if (typeof leadTime === "string") {
+      const match = leadTime.match(/(\d+)/);
+      if (match) return Number(match[1]);
+    }
+    if (typeof leadTime === "number") return leadTime;
+  }
+  return null;
+}
 
 export type VendorQuoteExtraction = z.infer<typeof vendorQuoteExtractionSchema>;
 

@@ -4,9 +4,18 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { recordActivity } from "@/lib/activity-log";
 
+type LineItem = {
+  id: string;
+  sku: string;
+  description?: string | null;
+  annual_quantity?: number | null;
+  unit?: string | null;
+  status?: "AI_SUGGESTED" | "BUYER_CONFIRMED" | null;
+};
+
 type RfxState = {
   rfx?: { id: string; name?: string | null; category?: string | null; description?: string | null; status?: string | null; currency?: string | null; max_lead_time_days?: number | null; minimum_awarded_vendors?: number | null } | null;
-  lineItems?: Array<{ id: string; sku: string; description?: string | null; annual_quantity?: number | null; unit?: string | null }>;
+  lineItems?: LineItem[];
   requirements?: Array<{ id: string; name: string }>;
   questionnaire?: Array<{ id: string; question: string; required?: boolean | null }>;
 };
@@ -27,7 +36,7 @@ export default function BuildPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "copilot", text: "What are you sourcing? Share the rough brief and I will turn it into an RFx draft." },
+    { role: "copilot", text: "What are you sourcing? Describe it in your own words and I'll match it against our packaging catalog." },
   ]);
   const [feed, setFeed] = useState<FeedEvent[]>([
     { time: now(), label: "Workspace ready", detail: "Copilot is connected and waiting for your sourcing brief.", tone: "green" },
@@ -46,7 +55,7 @@ export default function BuildPage() {
           window.localStorage.setItem("aerchain:selected-rfx-id", data.data.rfx.id);
           setState(data.data);
           setFeed((current) => [{ time: now(), label: "Draft loaded", detail: "The latest RFx state is ready for review.", tone: "blue" }, ...current]);
-        } else setError("No RFx draft found. Load the sample RFx to begin.");
+        } else setError("No RFx draft found. Create a new RFx to begin.");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load RFx state");
       }
@@ -66,7 +75,7 @@ export default function BuildPage() {
       setHasExplicitDraftSelection(true);
       window.localStorage.setItem("aerchain:selected-rfx-id", selectedId);
       setState(data.data);
-      setMessages([{ role: "copilot", text: "This draft is selected. Add or clarify details and I will update only this RFx." }]);
+      setMessages([{ role: "copilot", text: "This draft is selected. Add or clarify items and I will update only this RFx." }]);
       setFeed((current) => [{ time: now(), label: "Draft selected", detail: `Working on ${data.data.rfx.name || "Untitled RFx"}.`, tone: "blue" }, ...current]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load RFx");
@@ -87,7 +96,7 @@ export default function BuildPage() {
       window.localStorage.setItem("aerchain:selected-rfx-id", data.draft.id);
       setState(data.data);
       setDrafts((current) => [data.draft, ...current]);
-      setMessages([{ role: "copilot", text: "New RFx draft created. Tell me what you want to source." }]);
+      setMessages([{ role: "copilot", text: "New RFx started, empty for now. Tell me what you want to source and I'll match it to our catalog." }]);
       setFeed((current) => [{ time: now(), label: "New draft created", detail: "This conversation is isolated to the new RFx.", tone: "green" }, ...current]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create RFx");
@@ -122,7 +131,7 @@ export default function BuildPage() {
     const text = message.trim();
     if (!text) return;
     setMessages((current) => [...current, { role: "buyer", text }]);
-    setFeed((current) => [{ time: now(), label: "Brief received", detail: "Sending your request to the RFx copilot.", tone: "blue" }, ...current]);
+    setFeed((current) => [{ time: now(), label: "Brief received", detail: "Matching your request against the fixed catalog.", tone: "blue" }, ...current]);
     setMessage("");
     const response = await runAction("build_from_message", { message: text, newRfx: !hasExplicitDraftSelection });
     setHasExplicitDraftSelection(true);
@@ -136,13 +145,68 @@ export default function BuildPage() {
       });
     }
     if (response?.message) setMessages((current) => [...current, { role: "copilot", text: response.message }]);
-    if (response?.clarification) setMessages((current) => [...current, { role: "notice", text: `Clarification needed: ${response.clarification}` }]);
+    if (response?.newlySuggestedSkus?.length > 0) {
+      setMessages((current) => [...current, { role: "notice", text: `Matched: ${response.newlySuggestedSkus.join(", ")}. Confirm or remove each in the review panel before sending.` }]);
+    }
+    if (response?.clarification) {
+      setMessages((current) => [...current, { role: "notice", text: `Before I can match that: ${response.clarification}` }]);
+    }
+    if (response?.droppedHallucinations?.length > 0) {
+      setFeed((current) => [{ time: now(), label: "Non-catalog SKU discarded", detail: `Model referenced ${response.droppedHallucinations.join(", ")}, not in our catalog. Discarded automatically.`, tone: "amber" }, ...current]);
+    }
     if (response) setFeed((current) => [{ time: now(), label: "RFx draft updated", detail: "The preview reflects the latest copilot response.", tone: "green" }, ...current]);
   };
 
-  const loadSample = async () => {
-    const response = await runAction("draft_rfx_from_seed");
-    if (response) setFeed((current) => [{ time: now(), label: "Sample scope loaded", detail: "30 seeded packaging line items are available to review.", tone: "blue" }, ...current]);
+  const loadDemoCatalog = async () => {
+    const response = await runAction("load_full_catalog_demo");
+    if (response) {
+      setMessages((current) => [...current, { role: "notice", text: "Loaded the full 30-item demo catalog directly (bypassing the conversation) for demo purposes." }]);
+      setFeed((current) => [{ time: now(), label: "Demo catalog loaded", detail: "All 30 seeded packaging line items are available to review.", tone: "blue" }, ...current]);
+    }
+  };
+
+  const refreshState = async (targetRfxId: string) => {
+    const response = await fetch(`/api/rfx-builder?rfxId=${targetRfxId}`);
+    const data = await response.json();
+    if (data?.success && data?.data?.rfx) setState(data.data);
+  };
+
+  const confirmItem = async (lineItemId: string) => {
+    if (!rfxId) return;
+    setLoading(true);
+    recordActivity("Build RFx", "API request", "confirm_line_item", "running");
+    try {
+      const response = await fetch("/api/rfx-builder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "confirm_line_item", lineItemId }) });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || "Confirm failed");
+      recordActivity("Build RFx", "API completed", "confirm_line_item", "success");
+      await refreshState(rfxId);
+      setFeed((current) => [{ time: now(), label: "Item confirmed", detail: "Catalog item added to RFx scope.", tone: "green" }, ...current]);
+    } catch (err) {
+      recordActivity("Build RFx", "API failed", err instanceof Error ? err.message : "Confirm failed", "error");
+      setError(err instanceof Error ? err.message : "Confirm failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const removeItem = async (lineItemId: string) => {
+    if (!rfxId) return;
+    setLoading(true);
+    recordActivity("Build RFx", "API request", "delete_rfx_line_item", "running");
+    try {
+      const response = await fetch("/api/rfx-builder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "delete_rfx_line_item", lineItemId }) });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || "Remove failed");
+      recordActivity("Build RFx", "API completed", "delete_rfx_line_item", "success");
+      await refreshState(rfxId);
+      setFeed((current) => [{ time: now(), label: "Item removed", detail: "Catalog item dropped from the RFx.", tone: "amber" }, ...current]);
+    } catch (err) {
+      recordActivity("Build RFx", "API failed", err instanceof Error ? err.message : "Remove failed", "error");
+      setError(err instanceof Error ? err.message : "Remove failed");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const approve = async () => {
@@ -151,42 +215,62 @@ export default function BuildPage() {
   };
 
   const rfx = state?.rfx;
-  const items = [...(state?.lineItems ?? [])].sort((left, right) => {
-    const leftIsRequest = left.sku.startsWith("REQ-") ? 0 : 1;
-    const rightIsRequest = right.sku.startsWith("REQ-") ? 0 : 1;
-    return leftIsRequest - rightIsRequest;
-  });
+  const lineItems = state?.lineItems ?? [];
+  const confirmedItems = lineItems.filter((item) => item.status === "BUYER_CONFIRMED");
+  const pendingItems = lineItems.filter((item) => item.status !== "BUYER_CONFIRMED");
   const isApproved = rfx?.status === "SENT";
-  const activeStep = isApproved ? 2 : rfx?.name ? 1 : 0;
+  const activeStep = isApproved ? 2 : confirmedItems.length > 0 ? 1 : 0;
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-col gap-4 border-b border-slate-200 pb-5 lg:flex-row lg:items-end lg:justify-between">
-        <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-sky-700">RFx workspace</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Create and launch a sourcing event</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Start with a conversation, review the structured request, then move suppliers into response and award analysis.</p></div>
-        <div className="flex flex-wrap items-center justify-end gap-2"><select value={rfxId ?? ""} onChange={(event) => void selectDraft(event.target.value)} disabled={loading || drafts.length === 0} aria-label="Select RFx draft" className="max-w-55 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700"><option value="">Select draft</option>{drafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.name || "Untitled RFx"}</option>)}</select><button onClick={() => void createNewRfx()} disabled={loading} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">New RFx</button><button onClick={() => void loadSample()} disabled={loading || !rfxId} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-sky-400 hover:text-sky-700 disabled:opacity-50">Use sample scope</button></div>
+      <header className="flex flex-col gap-4 border-b border-slate-200 pb-5 lg:flex-row lg:items-center lg:justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-950">New sourcing event</h1>
+        <div className="flex flex-wrap items-center justify-end gap-2"><select value={rfxId ?? ""} onChange={(event) => void selectDraft(event.target.value)} disabled={loading || drafts.length === 0} aria-label="Select RFx draft" className="max-w-55 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700"><option value="">Select draft</option>{drafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.name || "Untitled RFx"}</option>)}</select><button onClick={() => void createNewRfx()} disabled={loading} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">New RFx</button><button onClick={() => void loadDemoCatalog()} disabled={loading || !rfxId} title="Bypasses the conversation. For demo purposes only." className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-500 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50">Load full demo catalog</button></div>
       </header>
 
-      <nav aria-label="RFx progress" className="flex flex-wrap items-center gap-2 sm:gap-0">{steps.map((step, index) => <div key={step} className="flex items-center"><div className={`flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold ${index <= activeStep ? "bg-sky-50 text-sky-800" : "text-slate-400"}`}><span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs ${index <= activeStep ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-500"}`}>{index + 1}</span>{step}</div>{index < steps.length - 1 && <span className={`mx-1 hidden h-px w-8 sm:block ${index < activeStep ? "bg-sky-300" : "bg-slate-200"}`} />}</div>)}</nav>
 
       <main className="grid gap-6 xl:h-[calc(100vh-16rem)] xl:min-h-135 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <section className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-700">Copilot</p><h2 className="mt-1 text-lg font-semibold text-slate-950">Build the brief</h2></div><span className="flex items-center gap-2 text-xs font-semibold text-emerald-700"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Live</span></div>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-50/70 p-5">{messages.map((item, index) => <div key={`${item.role}-${index}`} className={`flex ${item.role === "buyer" ? "justify-end" : "justify-start"}`}><div className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6 ${item.role === "buyer" ? "rounded-br-sm bg-sky-600 text-white" : item.role === "notice" ? "border border-amber-200 bg-amber-50 text-amber-900" : "rounded-bl-sm border border-slate-200 bg-white text-slate-700 shadow-sm"}`}>{item.role !== "buyer" && <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">{item.role === "notice" ? "Review point" : "RFx copilot"}</p>}{item.text}</div></div>)}{loading && <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><span className="h-2 w-2 animate-pulse rounded-full bg-sky-500" /> Working on the RFx draft...</div>}</div>
-          <div className="border-t border-slate-200 p-4"><textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitMessage(); } }} disabled={loading || !rfxId} rows={3} placeholder="Example: Source corrugated cartons for India fulfillment centers, with annual volumes and a 21-day lead time." className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-900 outline-none ring-sky-500 placeholder:text-slate-400 focus:ring-2" /><div className="mt-2 flex items-center justify-between"><span className="text-xs text-slate-400">Enter to send · Shift + Enter for a new line</span><button onClick={() => void submitMessage()} disabled={loading || !rfxId || !message.trim()} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:bg-slate-300">Send brief</button></div></div>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-50/70 p-5">{messages.map((item, index) => <div key={`${item.role}-${index}`} className={`flex ${item.role === "buyer" ? "justify-end" : "justify-start"}`}><div className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6 ${item.role === "buyer" ? "rounded-br-sm bg-sky-600 text-white" : item.role === "notice" ? "border border-amber-200 bg-amber-50 text-amber-900" : "rounded-bl-sm border border-slate-200 bg-white text-slate-700 shadow-sm"}`}>{item.role !== "buyer" && <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">{item.role === "notice" ? "Review point" : "RFx copilot"}</p>}{item.text}</div></div>)}{loading && <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><span className="h-2 w-2 animate-pulse rounded-full bg-sky-500" /> Matching against the catalog...</div>}</div>
+          <div className="border-t border-slate-200 p-4"><textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitMessage(); } }} disabled={loading} rows={3} placeholder="Example: We need 3-ply mailer boxes and 5-ply export boxes, around 120,000 a year, delivered within 14 days." className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-900 outline-none ring-sky-500 placeholder:text-slate-400 focus:ring-2" /><div className="mt-2 flex items-center justify-between"><span className="text-xs text-slate-400">Enter to send · Shift + Enter for a new line</span><button onClick={() => void submitMessage()} disabled={loading || !message.trim()} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:bg-slate-300">Send</button></div></div>
         </section>
 
         <section className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Live preview</p><h2 className="mt-1 text-lg font-semibold text-slate-950">RFx review</h2></div><div className="flex gap-2"><button onClick={() => void runAction("validate_rfx")} disabled={loading || !rfxId} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-sky-400 hover:text-sky-700 disabled:opacity-50">Validate</button><button onClick={() => void approve()} disabled={loading || !rfxId || isApproved} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">{isApproved ? "Approved" : "Approve & send"}</button></div></div>
-          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5"><div className="border-b border-slate-100 pb-5"><p className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">{rfx?.category || "Category pending"}</p><h3 className="mt-2 text-2xl font-semibold text-slate-950">{rfx?.name || "Untitled sourcing event"}</h3><p className="mt-2 text-sm leading-6 text-slate-600">{rfx?.description || "Send a brief to create the RFx summary here."}</p><div className="mt-4 flex flex-wrap gap-2 text-xs font-medium text-slate-600"><span className="rounded-full bg-slate-100 px-3 py-1.5">{rfx?.currency || "INR"}</span><span className="rounded-full bg-slate-100 px-3 py-1.5">{rfx?.max_lead_time_days ? `${rfx.max_lead_time_days} day lead time` : "Lead time open"}</span><span className="rounded-full bg-slate-100 px-3 py-1.5">{rfx?.minimum_awarded_vendors || "No"} minimum suppliers</span></div></div>
-            <div><div className="flex items-center justify-between"><h3 className="font-semibold text-slate-950">Scope</h3><span className="text-xs text-slate-500">{items.length} line items</span></div><div className="mt-3 overflow-hidden rounded-xl border border-slate-200">{items.length === 0 ? <p className="p-4 text-sm text-slate-500">No line items yet. Load the sample scope or describe a need.</p> : items.slice(0, 6).map((item) => <div key={item.id} className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3 last:border-0"><div className="min-w-0"><p className="font-mono text-xs font-bold text-sky-700">{item.sku}</p><p className="truncate text-sm text-slate-700">{item.description || "Description pending"}</p></div><span className="shrink-0 text-xs text-slate-500">{item.annual_quantity?.toLocaleString("en-IN") || "-"} {item.unit || "pcs"}</span></div>)}{items.length > 6 && <p className="border-t border-slate-100 px-4 py-3 text-xs font-semibold text-sky-700">+ {items.length - 6} more items</p>}</div></div>
-            <div className="grid gap-3 sm:grid-cols-2"><div className="rounded-xl border border-slate-200 p-4"><div className="flex justify-between"><h3 className="font-semibold text-slate-950">Requirements</h3><span className="text-xs text-slate-500">{state?.requirements?.length ?? 0}</span></div><p className="mt-2 text-xs leading-5 text-slate-500">Rules applied during supplier qualification.</p></div><div className="rounded-xl border border-slate-200 p-4"><div className="flex justify-between"><h3 className="font-semibold text-slate-950">Fixed questionnaire</h3><span className="text-xs text-slate-500">{state?.questionnaire?.length ?? 0}</span></div><div className="mt-3 space-y-2">{(state?.questionnaire ?? []).map((question, index) => <div key={question.id} className="border-t border-slate-100 pt-2 text-xs leading-5 text-slate-600"><span className="mr-1 font-semibold text-slate-400">{index + 1}.</span>{question.question}</div>)}</div></div></div></div>
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+            <div className="border-b border-slate-100 pb-5"><h3 className="text-2xl font-semibold text-slate-950">{rfx?.category || "Category pending"}</h3><p className="mt-2 text-sm leading-6 text-slate-600">{rfx?.description || "Send a message to start populating the RFx summary here."}</p><div className="mt-4 flex flex-wrap gap-2 text-xs font-medium text-slate-600"><span className="rounded-full bg-slate-100 px-3 py-1.5">{rfx?.currency || "INR"}</span><span className="rounded-full bg-slate-100 px-3 py-1.5">{rfx?.max_lead_time_days ? `${rfx.max_lead_time_days} day lead time` : "Lead time open"}</span><span className="rounded-full bg-slate-100 px-3 py-1.5">{rfx?.minimum_awarded_vendors || "No"} minimum suppliers</span></div></div>
+
+            {pendingItems.length > 0 && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                <div className="flex items-center justify-between"><h3 className="font-semibold text-amber-900">Needs your confirmation</h3><span className="text-xs font-semibold text-amber-700">{pendingItems.length} item(s)</span></div>
+                <p className="mt-1 text-xs text-amber-800">The copilot matched these from the catalog. Nothing here is part of the RFx until you confirm it.</p>
+                <div className="mt-3 space-y-2">
+                  {pendingItems.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-white px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="font-mono text-xs font-bold text-sky-700">{item.sku}</p>
+                        <p className="truncate text-sm text-slate-700">{item.description}</p>
+                        <p className="text-xs text-slate-500">{item.annual_quantity?.toLocaleString("en-IN")} {item.unit}</p>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <button onClick={() => void confirmItem(item.id)} disabled={loading} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Confirm</button>
+                        <button onClick={() => void removeItem(item.id)} disabled={loading} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-rose-300 hover:text-rose-700 disabled:opacity-50">Remove</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div><div className="flex items-center justify-between"><h3 className="font-semibold text-slate-950">Confirmed scope</h3><span className="text-xs text-slate-500">{confirmedItems.length} line items</span></div><div className="mt-3 overflow-hidden rounded-xl border border-slate-200">{confirmedItems.length === 0 ? <p className="p-4 text-sm text-slate-500">No confirmed items yet. Describe your need above, then confirm the matches.</p> : confirmedItems.slice(0, 8).map((item) => <div key={item.id} className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3 last:border-0"><div className="min-w-0"><p className="font-mono text-xs font-bold text-sky-700">{item.sku}</p><p className="truncate text-sm text-slate-700">{item.description || "Description pending"}</p></div><span className="shrink-0 text-xs text-slate-500">{item.annual_quantity?.toLocaleString("en-IN") || "-"} {item.unit || "pcs"}</span></div>)}{confirmedItems.length > 8 && <p className="border-t border-slate-100 px-4 py-3 text-xs font-semibold text-sky-700">+ {confirmedItems.length - 8} more items</p>}</div></div>
+
+            <div><div className="rounded-xl border border-slate-200 p-4"><div className="flex justify-between"><h3 className="font-semibold text-slate-950">Fixed questionnaire</h3><span className="text-xs text-slate-500">{state?.questionnaire?.length ?? 0}</span></div><div className="mt-3 space-y-2">{(state?.questionnaire ?? []).map((question, index) => <div key={question.id} className="border-t border-slate-100 pt-2 text-xs leading-5 text-slate-600"><span className="mr-1 font-semibold text-slate-400">{index + 1}.</span>{question.question}</div>)}</div></div></div>
+          </div>
         </section>
       </main>
 
-      <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Activity</p><h2 className="mt-1 text-lg font-semibold text-slate-950">Live processing feed</h2></div><span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{feed.length} events</span></div><div className="mt-4 space-y-3">{feed.slice(0, 5).map((event, index) => <div key={`${event.time}-${index}`} className="flex gap-3"><span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${event.tone === "green" ? "bg-emerald-500" : event.tone === "amber" ? "bg-amber-500" : "bg-sky-500"}`} /><div className="min-w-0 flex-1"><div className="flex justify-between gap-3"><p className="text-sm font-semibold text-slate-800">{event.label}</p><time className="text-xs text-slate-400">{event.time}</time></div><p className="mt-1 text-xs leading-5 text-slate-500">{event.detail}</p></div></div>)}</div>{error && <p className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}</div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5"><p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Continue the workflow</p><div className="mt-4 space-y-3"><Link href="/responses" className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-4 hover:border-sky-300"><span><span className="block text-sm font-semibold text-slate-900">Collect responses</span><span className="mt-1 block text-xs text-slate-500">Upload supplier documents for extraction.</span></span><span className="text-sky-700">-&gt;</span></Link><Link href="/compare" className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-4 hover:border-sky-300"><span><span className="block text-sm font-semibold text-slate-900">Compare quotes</span><span className="mt-1 block text-xs text-slate-500">Inspect normalized prices and evidence.</span></span><span className="text-sky-700">-&gt;</span></Link><Link href="/ask" className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-4 hover:border-sky-300"><span><span className="block text-sm font-semibold text-slate-900">Ask the analyst</span><span className="mt-1 block text-xs text-slate-500">Run award scenarios and recommendations.</span></span><span className="text-sky-700">-&gt;</span></Link></div></div>
-      </section>
+
     </div>
   );
 }

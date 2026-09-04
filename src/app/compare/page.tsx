@@ -250,29 +250,29 @@ export default function ComparePage() {
   return (
     <div className="space-y-6">
       <RfxContextBar stage="Compare" />
-      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <p className="text-xs font-bold uppercase tracking-[0.2em] text-sky-700">Step 3 · Compare</p>
-        <h2 className="mt-2 text-2xl font-semibold">{rfxName}</h2>
-        <p className="mt-1 text-lg font-semibold text-slate-800">Find the best eligible quote</p>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Compare normalized prices without losing the original supplier context. Select any value to inspect its source, conversion, and validation evidence.</p>
-      </section>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="text-2xl font-semibold text-slate-900">Compare quotes</h2>
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
+            <span className="rounded-full bg-slate-100 px-3 py-1">{vendors.length} suppliers</span>
+            <span className="rounded-full bg-slate-100 px-3 py-1">{skus.length} SKUs</span>
+          </div>
+        </div>
+        <button type="button" onClick={() => setRefreshToken((current) => current + 1)} disabled={loading} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-sky-400 hover:text-sky-700 disabled:opacity-50">{loading ? "Refreshing..." : "Refresh data"}</button>
+      </div>
 
-      <section className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Suppliers</p><p className="mt-2 text-2xl font-semibold text-slate-950">{vendors.length}</p><p className="mt-1 text-xs text-slate-500">with response status</p></div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">RFx scope</p><p className="mt-2 text-2xl font-semibold text-slate-950">{skus.length}</p><p className="mt-1 text-xs text-slate-500">line items to compare</p></div>
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-emerald-700">Evidence-first</p><p className="mt-2 text-lg font-semibold text-emerald-950">Click any quote</p><p className="mt-1 text-xs text-emerald-800">to open its provenance</p></div>
-      </section>
-
-      <div className="flex justify-end"><button type="button" onClick={() => setRefreshToken((current) => current + 1)} disabled={loading} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-sky-400 hover:text-sky-700 disabled:opacity-50">{loading ? "Refreshing..." : "Refresh extracted data"}</button></div>
-
-      <section className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-        <span className="font-semibold text-slate-800">View</span>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={qualifiedOnly} onChange={(event) => setQualifiedOnly(event.target.checked)} /> Qualified only</label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={comparableOnly} onChange={(event) => setComparableOnly(event.target.checked)} /> Comparable quotes only</label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={includeReview} onChange={(event) => setIncludeReview(event.target.checked)} /> Include review</label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={showFailed} onChange={(event) => setShowFailed(event.target.checked)} /> Show failed</label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={showConfidence} onChange={(event) => setShowConfidence(event.target.checked)} /> Confidence</label>
-        <span className="ml-auto text-xs text-slate-500">{visibleSkus.length} SKUs · {visibleVendors.length} vendors</span>
+      <section className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-700">
+        <span className="font-semibold text-slate-900 uppercase tracking-wide">Filters</span>
+        <label className="flex items-center gap-1.5"><input type="checkbox" className="rounded border-slate-300 text-sky-600 focus:ring-sky-500" checked={qualifiedOnly} onChange={(event) => setQualifiedOnly(event.target.checked)} /> Qualified</label>
+        <label className="flex items-center gap-1.5"><input type="checkbox" className="rounded border-slate-300 text-sky-600 focus:ring-sky-500" checked={comparableOnly} onChange={(event) => setComparableOnly(event.target.checked)} /> Comparable only</label>
+        <label className="flex items-center gap-1.5"><input type="checkbox" className="rounded border-slate-300 text-sky-600 focus:ring-sky-500" checked={includeReview} onChange={(event) => setIncludeReview(event.target.checked)} /> Include review</label>
+        <label className="flex items-center gap-1.5"><input type="checkbox" className="rounded border-slate-300 text-sky-600 focus:ring-sky-500" checked={showFailed} onChange={(event) => setShowFailed(event.target.checked)} /> Show failed</label>
+        <label className="flex items-center gap-1.5"><input type="checkbox" className="rounded border-slate-300 text-sky-600 focus:ring-sky-500" checked={showConfidence} onChange={(event) => setShowConfidence(event.target.checked)} /> Confidence scores</label>
+        
+        <div className="ml-auto flex items-center gap-2 text-sky-700">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-100 font-bold">ⓘ</span>
+          Click any quote to view source evidence
+        </div>
       </section>
 
       {visibleVendors.length === 0 ? (

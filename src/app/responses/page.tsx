@@ -254,12 +254,7 @@ export default function ResponsesPage() {
   return (
     <div className="space-y-6">
       <RfxContextBar stage="Upload" />
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <p className="text-xs font-bold uppercase tracking-[0.2em] text-sky-700">Step 2 · Collect responses</p>
-        <h2 className="mt-2 text-2xl font-semibold">{rfxName}</h2>
-        <p className="mt-1 text-lg font-semibold text-slate-800">Collect supplier responses</p>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Upload the original response, choose its supplier, then run extraction. The original file, interpreted values, and confidence remain linked for review.</p>
-      </div>
+
 
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-1"><h3 className="text-lg font-semibold">Add supplier response</h3><p className="text-sm text-slate-500">Supported: PDF, image, Word, Excel, CSV, JSON, Markdown, and text.</p></div>
@@ -339,26 +334,7 @@ export default function ResponsesPage() {
         </div>
       )}
 
-      <div className="text-xs text-slate-600">
-        <p className="font-medium mb-2">Legend:</p>
-        <ul className="space-y-1">
-          <li>
-            <strong>Vendor A:</strong> Clean Excel, complete quote – Qualified
-          </li>
-          <li>
-            <strong>Vendor B:</strong> Partial quote (24/30 SKUs), CP-012 substitution issue – Qualified overall
-          </li>
-          <li>
-            <strong>Vendor C:</strong> Word/PDF, narrative, conditional 3% rebate, ambiguous SLA – Review/conditional
-          </li>
-          <li>
-            <strong>Vendor D:</strong> Mixed units/currencies (₹42/kg, $0.28/unit, ₹1,850/100 pcs) – Review/fail
-          </li>
-          <li>
-            <strong>Vendor E:</strong> Image/photo quote, 30-day lead time – Fails qualification
-          </li>
-        </ul>
-      </div>
+
     </div>
   );
 }

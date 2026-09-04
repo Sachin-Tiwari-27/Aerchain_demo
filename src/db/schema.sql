@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS rfx_line_items (
   height_mm INTEGER,
   annual_quantity NUMERIC,
   unit TEXT,
+  status TEXT NOT NULL DEFAULT 'AI_SUGGESTED',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

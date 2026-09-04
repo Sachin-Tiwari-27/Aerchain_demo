@@ -65,6 +65,21 @@ export async function POST(req: Request) {
       throw lineItemsError;
     }
 
+    // Fetch the RFx record to get the expected currency
+    const { data: rfxData } = await supabase
+      .from("rfxs")
+      .select("currency")
+      .eq("id", input.rfxId)
+      .maybeSingle();
+
+    // Build annual quantities map for MOQ validation
+    const annualQuantities: Record<string, number> = {};
+    for (const li of lineItems ?? []) {
+      if (li.sku && li.annual_quantity != null) {
+        annualQuantities[li.sku] = Number(li.annual_quantity);
+      }
+    }
+
     const pipeline = await processExtractedQuotes({
       vendorId: input.vendorId,
       vendorResponseId: vendorResponse.id,
@@ -72,6 +87,8 @@ export async function POST(req: Request) {
       rfxId: input.rfxId,
       extraction: result.data,
       lineItems: lineItems || [],
+      annualQuantities,
+      rfxCurrency: rfxData?.currency ?? undefined,
     });
     await saveProcessedQuotes(supabase, pipeline);
 

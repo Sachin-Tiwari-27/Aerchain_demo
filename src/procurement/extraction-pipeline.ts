@@ -1,7 +1,40 @@
 import { z } from "zod";
 import type { VendorQuoteExtraction } from "@/ai/extraction";
 import { validateQuote, validateMoq } from "@/procurement/validation";
-import { normalizeExtractedQuote } from "@/procurement/normalization";
+import { normalizeExtractedQuote, parseUnitFactor } from "@/procurement/normalization";
+
+/** Supported currency codes for normalization. */
+const KNOWN_CURRENCIES = new Set(["USD", "EUR", "GBP", "INR", "CAD", "JPY"]);
+
+/**
+ * Tokenize a string into lowercase words, stripping punctuation.
+ * Used for description-based fallback mapping.
+ */
+function tokenize(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((t) => t.length > 2),
+  );
+}
+
+/**
+ * Jaccard-style token overlap score between two strings.
+ * Returns a value in [0, 1].
+ */
+function tokenOverlap(a: string, b: string): number {
+  const setA = tokenize(a);
+  const setB = tokenize(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let intersection = 0;
+  for (const token of setA) {
+    if (setB.has(token)) intersection++;
+  }
+  const union = setA.size + setB.size - intersection;
+  return intersection / union;
+}
 
 type RfxLineItem = {
   id: string;
@@ -42,7 +75,11 @@ export type QuoteProcessingResult = {
 
 /**
  * Map extracted quote items to line item IDs using confidence-based matching.
- * For MVP: exact SKU match or fuzzy description match above 0.7 confidence.
+ *
+ * Strategy (in priority order):
+ * 1. Exact SKU match (case-insensitive)                 → confidence 0.95
+ * 2. Token-overlap description match (Jaccard ≥ 0.40)   → confidence 0.60–0.80
+ * 3. Single-item RFx auto-assign (last resort)           → confidence 0.50
  */
 export function mapQuotesToLineItems(
   extractedQuotes: Array<{
@@ -72,10 +109,10 @@ export function mapQuotesToLineItems(
   }> = [];
 
   for (const extracted of extractedQuotes) {
-    // Try exact SKU match first
+    // 1. Exact SKU match (highest confidence)
     if (extracted.sku_reference) {
       const exactMatch = lineItems.find(
-        (li) => li.sku.toLowerCase() === extracted.sku_reference?.toLowerCase(),
+        (li) => li.sku.toLowerCase() === extracted.sku_reference!.toLowerCase(),
       );
       if (exactMatch) {
         mapped.push({
@@ -88,21 +125,45 @@ export function mapQuotesToLineItems(
       }
     }
 
-    // Fallback: look for first unmapped line item with reasonable description overlap
-    // (In production, use fuzzy matching or manual curation)
-    const unmappedLineItem = lineItems.find(
-      (li) =>
-        !mapped.some((m) => m.lineItemId === li.id) &&
-        extracted.description &&
-        li.description?.toLowerCase().includes(extracted.description.toLowerCase().slice(0, 10)),
+    // 2. Token-overlap description match
+    const unmappedCandidates = lineItems.filter(
+      (li) => !mapped.some((m) => m.lineItemId === li.id),
     );
 
-    if (unmappedLineItem) {
+    let bestMatch: RfxLineItem | null = null;
+    let bestScore = 0;
+
+    if (extracted.description) {
+      for (const li of unmappedCandidates) {
+        const liText = [li.description ?? "", li.sku].join(" ");
+        const score = tokenOverlap(extracted.description, liText);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = li;
+        }
+      }
+    }
+
+    // Accept description match if Jaccard overlap ≥ 0.40
+    if (bestMatch && bestScore >= 0.40) {
       mapped.push({
-        lineItemId: unmappedLineItem.id,
-        sku: unmappedLineItem.sku,
+        lineItemId: bestMatch.id,
+        sku: bestMatch.sku,
         extractedQuote: extracted,
-        confidence: 0.65,
+        // Scale confidence with overlap score (0.60 at threshold → 0.80 at full match)
+        confidence: Math.min(0.80, 0.60 + (bestScore - 0.40) * 1.0),
+      });
+      continue;
+    }
+
+    // 3. Last resort: auto-assign when the RFx has exactly one line item
+    //    (vendor sent a single-SKU quote without explicit SKU code)
+    if (unmappedCandidates.length === 1) {
+      mapped.push({
+        lineItemId: unmappedCandidates[0].id,
+        sku: unmappedCandidates[0].sku,
+        extractedQuote: extracted,
+        confidence: 0.50,
       });
     }
   }
@@ -121,8 +182,9 @@ export async function processExtractedQuotes(input: {
   extraction: VendorQuoteExtraction;
   lineItems: RfxLineItem[];
   annualQuantities?: Record<string, number>; // sku -> annual_quantity mapping
+  rfxCurrency?: string; // Expected currency for the RFx (e.g. "INR")
 }): Promise<QuoteProcessingResult> {
-  const { vendorId, vendorResponseId, rfxId, extraction, lineItems, annualQuantities = {} } = input;
+  const { vendorId, vendorResponseId, rfxId, extraction, lineItems, annualQuantities = {}, rfxCurrency } = input;
 
   const issues: Array<{
     issueType: string;
@@ -147,11 +209,14 @@ export async function processExtractedQuotes(input: {
     const lineItem = lineItems.find((li) => li.id === mapped.lineItemId)!;
 
     // Validate the price (include quantity so validation doesn't fail)
+    // Guard: annual_quantity may be null/0; fall back to a safe positive minimum
+    // so validateQuote never fails with "Quantity must be positive" on metadata gaps.
+    const safeQuantity = Math.max(1, Number(lineItem.annual_quantity ?? 1));
     const priceValidation: any = validateQuote({
       price: extracted.price ?? null,
       currency: (extracted.currency ?? undefined) as string | undefined,
       unit: (extracted.unit ?? undefined) as string | undefined,
-      quantity: Number(lineItem.annual_quantity ?? 1),  // Use annual_quantity from line item
+      quantity: safeQuantity,
       leadTimeDays: extraction.lead_time_days ?? 0,
       mandatorySpecPass: true,  // Assume pass unless flagged in extraction exceptions
     });
@@ -163,9 +228,18 @@ export async function processExtractedQuotes(input: {
     let validationStatus: "VALID" | "AMBIGUOUS" | "MISSING" | "FAILED" = "MISSING";
 
     if (priceValidation.status === "valid") {
+      // Resolve compound units like "1000 units" or "per kg" into a
+      // base unit + factor so the normalized price represents the
+      // per-base quantity (e.g. per piece, per kg).
+      const unitInfo = parseUnitFactor(extracted.unit);
+      const adjustedUnit = unitInfo ? unitInfo.baseUnit : (extracted.unit ?? "pcs");
+      const adjustedPrice = unitInfo && unitInfo.factor > 1
+        ? Number(extracted.price) / unitInfo.factor
+        : Number(extracted.price);
+
       const normalized: any = normalizeExtractedQuote({
-        price: extracted.price || 0,
-        unit: extracted.unit || "pcs",
+        price: adjustedPrice,
+        unit: adjustedUnit,
         currency: extracted.currency || "INR",
       });
       normalizedPrice = (normalized.normalizedPrice ?? null) as number | null;
@@ -196,7 +270,7 @@ export async function processExtractedQuotes(input: {
     }
 
     // Validate MOQ
-    const annualQty = annualQuantities[mapped.sku] ?? Number(lineItem.annual_quantity ?? 0);
+    const annualQty = Math.max(1, annualQuantities[mapped.sku] ?? Number(lineItem.annual_quantity ?? 1));
     const moqValidation = validateMoq({
       annualQuantity: annualQty,
       quoteMoq: extracted.moq,
@@ -212,6 +286,47 @@ export async function processExtractedQuotes(input: {
       validationStatus = "FAILED";
     } else if (moqValidation.status !== "not-stated") {
       // MOQ is stated and valid
+    }
+
+    // ── Edge-case checks ──────────────────────────────────────────────────────
+
+    // Check 1: SKU was not provided by vendor (matched by description/auto-assign)
+    if (mapped.confidence < 0.80 && !extracted.sku_reference) {
+      issues.push({
+        issueType: "SKU_MISSING",
+        severity: "WARNING",
+        message: `${mapped.sku}: Vendor did not supply an explicit SKU reference; matched by ${mapped.confidence >= 0.50 ? "description overlap" : "single-item auto-assign"} (confidence ${(mapped.confidence * 100).toFixed(0)}%)`,
+      });
+    }
+
+    // Check 2: Currency not recognised by the normalization layer
+    const rawCurrency = (extracted.currency ?? "").toUpperCase();
+    if (rawCurrency && !KNOWN_CURRENCIES.has(rawCurrency)) {
+      issues.push({
+        issueType: "CURRENCY_UNKNOWN",
+        severity: "ERROR",
+        message: `${mapped.sku}: Extracted currency "${rawCurrency}" is not supported. Supported: ${[...KNOWN_CURRENCIES].join(", ")}`,
+      });
+      if (validationStatus === "VALID") validationStatus = "AMBIGUOUS";
+    }
+
+    // Check 3: Currency does not match the RFx's requested currency
+    if (rfxCurrency && rawCurrency && KNOWN_CURRENCIES.has(rawCurrency) && rawCurrency !== rfxCurrency.toUpperCase()) {
+      issues.push({
+        issueType: "CURRENCY_MISMATCH",
+        severity: "WARNING",
+        message: `${mapped.sku}: Vendor quoted in ${rawCurrency} but RFx expects ${rfxCurrency.toUpperCase()}. Price has been converted.`,
+      });
+    }
+
+    // Check 4: Unit string could not be parsed into a known base unit
+    const unitInfo = extracted.unit ? parseUnitFactor(extracted.unit) : null;
+    if (extracted.unit && !unitInfo) {
+      issues.push({
+        issueType: "UNIT_UNRECOGNIZED",
+        severity: "WARNING",
+        message: `${mapped.sku}: Unit "${extracted.unit}" could not be mapped to a standard unit. Manual review required.`,
+      });
     }
 
     return {

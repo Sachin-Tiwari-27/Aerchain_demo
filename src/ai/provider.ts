@@ -355,8 +355,10 @@ export async function generateStructured<T>({
 }: GenerateStructuredOptions<T>): Promise<StructuredGenerationResult<T>> {
   const chain = getProviderChain(useCase);
   let lastError: unknown;
+  let schemaFailed = false;
 
   for (const provider of chain) {
+    if (schemaFailed) break;
     const model = getModel(provider, useCase);
 
     const attempts = [prompt, strictifyPrompt(prompt)];
@@ -372,6 +374,13 @@ export async function generateStructured<T>({
             continue;
           }
 
+          // If the second attempt is still not a valid schema match, stop
+          // here and do not fall through to a different provider. The
+          // model gave us a well-formed JSON object but it does not fit
+          // the requested contract; that is an application-level issue,
+          // not a transient provider failure, and another provider is
+          // extremely unlikely to produce a better match.
+          schemaFailed = true;
           throw new Error(`Schema validation failed on ${provider}: ${parsed.error.message}`);
         }
 

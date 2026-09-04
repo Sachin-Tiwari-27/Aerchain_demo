@@ -1,35 +1,6 @@
-export const RFX_TEMPLATE_ITEMS = [
-  { sku: "CP-001", description: "3-ply mailer box 600x400x300", annual_quantity: 15000, unit: "pcs" },
-  { sku: "CP-002", description: "3-ply shipping carton 500x350x250", annual_quantity: 18000, unit: "pcs" },
-  { sku: "CP-003", description: "5-ply export box 800x600x450", annual_quantity: 22000, unit: "pcs" },
-  { sku: "CP-004", description: "5-ply corrugated pad 1200x800x20", annual_quantity: 21000, unit: "pcs" },
-  { sku: "CP-005", description: "2-ply tray insert 400x300x150", annual_quantity: 16000, unit: "pcs" },
-  { sku: "CP-006", description: "3-ply FEFCO-style die box 650x450x320", annual_quantity: 17000, unit: "pcs" },
-  { sku: "CP-007", description: "4-ply heavy carton 750x550x420", annual_quantity: 19000, unit: "pcs" },
-  { sku: "CP-008", description: "7-ply display shipper 900x700x500", annual_quantity: 12000, unit: "pcs" },
-  { sku: "CP-009", description: "3-ply inner pack 320x220x120", annual_quantity: 26000, unit: "pcs" },
-  { sku: "CP-010", description: "2-ply brochure mailer 270x190x40", annual_quantity: 30000, unit: "pcs" },
-  { sku: "CP-011", description: "5-ply bottle shipper 520x400x300", annual_quantity: 14000, unit: "pcs" },
-  { sku: "CP-012", description: "4-ply telescopic carton 620x420x220", annual_quantity: 16000, unit: "pcs" },
-  { sku: "CP-013", description: "3-ply e-commerce box 430x300x180", annual_quantity: 28000, unit: "pcs" },
-  { sku: "CP-014", description: "5-ply appliance carton 980x680x540", annual_quantity: 9000, unit: "pcs" },
-  { sku: "CP-015", description: "3-ply food tray box 350x260x180", annual_quantity: 24000, unit: "pcs" },
-  { sku: "CP-016", description: "4-ply protective sleeve 1100x450x12", annual_quantity: 11000, unit: "pcs" },
-  { sku: "CP-017", description: "2-ply folding carton 240x180x90", annual_quantity: 32000, unit: "pcs" },
-  { sku: "CP-018", description: "6-ply crate liner 1250x850x30", annual_quantity: 8000, unit: "pcs" },
-  { sku: "CP-019", description: "5-ply multi-pack carton 760x520x360", annual_quantity: 15000, unit: "pcs" },
-  { sku: "CP-020", description: "3-ply dashboard carton 610x410x210", annual_quantity: 18000, unit: "pcs" },
-  { sku: "CP-021", description: "4-ply promotional shipper 680x480x260", annual_quantity: 13000, unit: "pcs" },
-  { sku: "CP-022", description: "2-ply retail mailer 400x260x120", annual_quantity: 27000, unit: "pcs" },
-  { sku: "CP-023", description: "6-ply pallet wrap box 1300x900x400", annual_quantity: 7000, unit: "pcs" },
-  { sku: "CP-024", description: "3-ply shoe carton 440x310x220", annual_quantity: 22000, unit: "pcs" },
-  { sku: "CP-025", description: "4-ply art print mailer 520x360x80", annual_quantity: 10000, unit: "pcs" },
-  { sku: "CP-026", description: "5-ply fruit tray carton 450x320x230", annual_quantity: 17000, unit: "pcs" },
-  { sku: "CP-027", description: "3-ply static-safe box 500x350x260", annual_quantity: 12000, unit: "pcs" },
-  { sku: "CP-028", description: "4-ply bakery carton 280x220x160", annual_quantity: 21000, unit: "pcs" },
-  { sku: "CP-029", description: "5-ply industrial parts box 860x620x410", annual_quantity: 8500, unit: "pcs" },
-  { sku: "CP-030", description: "3-ply medical kit carton 330x220x150", annual_quantity: 12500, unit: "pcs" },
-];
+import { z } from "zod";
+import { generateStructured } from "@/ai/provider";
+import { SKU_CATALOG, CATALOG_SKU_SET, getCatalogItem, renderCatalogForPrompt } from "@/procurement/catalog";
 
 export const RFX_TEMPLATE_REQUIREMENTS = [
   {
@@ -93,7 +64,7 @@ export async function ensureRfxDraft(supabase: any) {
     .insert({
       name: "India corrugated packaging procurement",
       category: "Corrugated Packaging",
-      description: "Draft RFx created from the seeded template.",
+      description: "Draft RFx created from a buyer conversation.",
       status: "DRAFT",
       currency: "INR",
       max_lead_time_days: 14,
@@ -106,6 +77,12 @@ export async function ensureRfxDraft(supabase: any) {
   return data?.[0] ?? null;
 }
 
+/**
+ * Creates a brand-new, EMPTY RFx draft. Line items are added only through
+ * the conversational catalog-matching flow (matchCatalogItems + addCatalogItemToRfx),
+ * never pre-populated. This is the core scope constraint: a buyer talks
+ * their way to a subset of the fixed catalog, they don't inherit the whole thing.
+ */
 export async function createRfxDraft(supabase: any) {
   const { data, error } = await supabase
     .from("rfxs")
@@ -124,28 +101,6 @@ export async function createRfxDraft(supabase: any) {
 
   if (error) throw new Error(error.message);
   await ensureRfxQuestionnaire(supabase, data.id);
-  for (const [index, item] of RFX_TEMPLATE_ITEMS.entries()) {
-    const { error: lineItemError } = await supabase.from("rfx_line_items").insert({
-      rfx_id: data.id,
-      ...item,
-      ply: Number(item.description.match(/^(\d+)-ply/)?.[1] ?? 0) || null,
-      gsm: null,
-      bursting_strength: null,
-      length_mm: null,
-      width_mm: null,
-      height_mm: null,
-    });
-    if (lineItemError) throw new Error(lineItemError.message);
-    const { data: lineItem } = await supabase.from("rfx_line_items").select("id").eq("rfx_id", data.id).eq("sku", item.sku).single();
-    const { error: baselineError } = await supabase.from("current_contract_prices").insert({
-      rfx_id: data.id,
-      line_item_id: lineItem?.id,
-      price: Number((32 + (index % 8) * 6 + index * 0.7).toFixed(2)),
-      unit: "pcs",
-      currency: "INR",
-    });
-    if (baselineError) throw new Error(baselineError.message);
-  }
   return data;
 }
 
@@ -199,34 +154,58 @@ export async function updateRfx(supabase: any, rfxId: string, updates: Record<st
   return { success: true, data: data?.[0] ?? null };
 }
 
-export async function addRfxLineItem(supabase: any, rfxId: string, item: Record<string, unknown>) {
-  if (!item.sku || !String(item.sku).trim()) {
-    throw new Error("SKU is required");
+/**
+ * Adds ONE catalog item to an RFx by SKU. Refuses any SKU not present in
+ * SKU_CATALOG — this is the deterministic backstop behind the AI matching
+ * step, so a hallucinated SKU can never reach the database.
+ */
+export async function addCatalogItemToRfx(
+  supabase: any,
+  rfxId: string,
+  sku: string,
+  overrides: { annual_quantity?: number | null } = {},
+  status: "AI_SUGGESTED" | "BUYER_CONFIRMED" = "AI_SUGGESTED",
+) {
+  const catalogItem = getCatalogItem(sku);
+  if (!catalogItem) {
+    throw new Error(`SKU ${sku} is not part of the fixed catalog and cannot be added`);
+  }
+
+  const { data: existing } = await supabase
+    .from("rfx_line_items")
+    .select("id")
+    .eq("rfx_id", rfxId)
+    .eq("sku", sku)
+    .maybeSingle();
+  if (existing) {
+    return { success: true, data: existing, alreadyPresent: true };
   }
 
   const payload = {
     rfx_id: rfxId,
-    sku: String(item.sku),
-    description: String(item.description ?? ""),
-    annual_quantity: Number(item.annual_quantity ?? 0),
-    unit: String(item.unit ?? "pcs"),
-    ply: item.ply == null ? null : Number(item.ply),
-    gsm: item.gsm == null ? null : Number(item.gsm),
-    length_mm: item.length_mm == null ? null : Number(item.length_mm),
-    width_mm: item.width_mm == null ? null : Number(item.width_mm),
-    height_mm: item.height_mm == null ? null : Number(item.height_mm),
+    sku: catalogItem.sku,
+    description: catalogItem.description,
+    ply: catalogItem.ply,
+    gsm: catalogItem.gsm,
+    bursting_strength: catalogItem.burstingStrength,
+    annual_quantity: overrides.annual_quantity ?? catalogItem.defaultAnnualQuantity,
+    unit: catalogItem.unit,
+    status,
     created_at: new Date().toISOString(),
   };
 
   const { data, error } = await supabase.from("rfx_line_items").insert(payload).select();
   if (error) throw new Error(error.message);
-  return { success: true, data: data?.[0] ?? null };
+  return { success: true, data: data?.[0] ?? null, alreadyPresent: false };
 }
 
 export async function updateRfxLineItem(supabase: any, lineItemId: string, updates: Record<string, unknown>) {
-  const allowed = ["sku", "description", "ply", "gsm", "length_mm", "width_mm", "height_mm", "annual_quantity", "unit"];
+  const allowed = ["annual_quantity", "unit", "status"];
   const disallowed = Object.keys(updates).filter((key) => !allowed.includes(key));
-  if (disallowed.length > 0) throw new Error(`Unsupported line-item field update: ${disallowed.join(", ")}`);
+  if (disallowed.length > 0) throw new Error(`Unsupported line-item field update: ${disallowed.join(", ")}. SKU, description, ply, and gsm come from the fixed catalog and cannot be edited.`);
+  if (updates.status && !["AI_SUGGESTED", "BUYER_CONFIRMED"].includes(String(updates.status))) {
+    throw new Error("Line item status must be AI_SUGGESTED or BUYER_CONFIRMED");
+  }
 
   const { data, error } = await supabase
     .from("rfx_line_items")
@@ -235,6 +214,10 @@ export async function updateRfxLineItem(supabase: any, lineItemId: string, updat
     .select();
   if (error) throw new Error(error.message);
   return { success: true, data: data?.[0] ?? null };
+}
+
+export async function confirmLineItem(supabase: any, lineItemId: string) {
+  return updateRfxLineItem(supabase, lineItemId, { status: "BUYER_CONFIRMED" });
 }
 
 export async function deleteRfxLineItem(supabase: any, lineItemId: string) {
@@ -273,9 +256,15 @@ export async function validateRfx(supabase: any, rfxId: string) {
   const state = await getRfxState(supabase, rfxId);
   const issues: string[] = [];
 
-  if (!state.data?.rfx?.name) issues.push("RFx name is missing");
+  if (!state.data?.rfx?.name || state.data.rfx.name === "Untitled RFx") issues.push("RFx needs a name");
   if (!state.data?.rfx?.category) issues.push("RFx category is missing");
-  if ((state.data?.lineItems?.length ?? 0) <= 0) issues.push("Add at least one line item");
+  if ((state.data?.lineItems?.length ?? 0) <= 0) issues.push("Talk through at least one line item before sending");
+
+  const unconfirmedItems = (state.data?.lineItems ?? []).filter((item: any) => item.status !== "BUYER_CONFIRMED");
+  if (unconfirmedItems.length > 0) {
+    issues.push(`${unconfirmedItems.length} line item(s) are still AI-suggested and need your confirmation`);
+  }
+
   if ((state.data?.questionnaire?.length ?? 0) <= 0) issues.push("Questionnaire is empty");
 
   const invalidRequirements = (state.data?.requirements ?? []).filter(
@@ -291,7 +280,13 @@ export async function validateRfx(supabase: any, rfxId: string) {
   };
 }
 
-export async function draftRfxFromSeed(supabase: any, rfxId?: string | null) {
+/**
+ * Demo-only escape hatch: loads the FULL 30-SKU catalog into an RFx in one
+ * shot. This intentionally bypasses the conversational flow and is used
+ * only to seed the fixture RFx that the 5 archetype vendor documents quote
+ * against. It is not part of the buyer-facing conversational path.
+ */
+export async function loadFullCatalogForDemo(supabase: any, rfxId?: string | null) {
   const baseRfx = rfxId ? await getRfxState(supabase, rfxId) : await getRfxState(supabase, null);
   const resolvedId = baseRfx.data?.rfx?.id ?? (await ensureRfxDraft(supabase))?.id;
 
@@ -301,15 +296,15 @@ export async function draftRfxFromSeed(supabase: any, rfxId?: string | null) {
 
   const state = await getRfxState(supabase, resolvedId);
   await ensureRfxQuestionnaire(supabase, resolvedId);
-  const existingLineItems = state.data?.lineItems ?? [];
+  const existingItems = state.data?.lineItems ?? [];
 
-  if (existingLineItems.length > 0) {
-    return { success: true, data: { lineItems: existingLineItems, rfx: state.data?.rfx, message: "Template already loaded" } };
+  if (existingItems.length > 0) {
+    return { success: true, data: { lineItems: existingItems, rfx: state.data?.rfx, message: "Catalog already loaded" } };
   }
 
   const insertedItems = [] as any[];
-  for (const item of RFX_TEMPLATE_ITEMS) {
-    const result = await addRfxLineItem(supabase, resolvedId, item);
+  for (const item of SKU_CATALOG) {
+    const result = await addCatalogItemToRfx(supabase, resolvedId, item.sku, {}, "BUYER_CONFIRMED");
     insertedItems.push(result.data);
   }
 
@@ -334,7 +329,7 @@ export async function draftRfxFromSeed(supabase: any, rfxId?: string | null) {
 
   const updatedRfx = await updateRfx(supabase, resolvedId, {
     status: "DRAFT",
-    name: "RFx Draft from template",
+    name: "RFx Draft (full demo catalog)",
     category: "Corrugated Packaging",
   });
 
@@ -343,7 +338,85 @@ export async function draftRfxFromSeed(supabase: any, rfxId?: string | null) {
     data: {
       lineItems: insertedItems.filter(Boolean),
       rfx: updatedRfx.data,
-      message: "Seeded RFx template loaded",
+      message: "Full demo catalog loaded",
     },
+  };
+}
+
+const catalogMatchSchema = z.object({
+  matched_skus: z
+    .array(
+      z.object({
+        sku: z.string(),
+        annual_quantity: z.number().nullable().optional().default(null),
+      }),
+    )
+    .default([]),
+  reply: z.string().default(""),
+  clarification_needed: z.string().nullable().default(null),
+});
+
+export type CatalogMatchResult = {
+  matches: Array<{ sku: string; annual_quantity: number | null }>;
+  reply: string;
+  clarification: string | null;
+  droppedHallucinations: string[];
+};
+
+/**
+ * The core "talk, don't click" mapping step.
+ *
+ * 1. The full catalog (SKU + description + defaults) is embedded in the
+ *    prompt every call, so the model never relies on memory.
+ * 2. The model may ONLY return SKUs; it is instructed never to invent one.
+ * 3. If the request is ambiguous (multiple catalog items could match, or
+ *    key details like ply/size are missing), the model must ask a
+ *    clarifying question instead of guessing.
+ * 4. Deterministic backstop: after the model responds, every returned SKU
+ *    is checked against CATALOG_SKU_SET. Anything not in the real catalog
+ *    is dropped before it ever reaches addCatalogItemToRfx, and reported
+ *    back so this can be logged/observed.
+ */
+export async function matchCatalogItems(input: {
+  message: string;
+  existingSkus: string[];
+}): Promise<CatalogMatchResult> {
+  const result = await generateStructured({
+    schema: catalogMatchSchema,
+    prompt: `You are mapping a buyer's natural-language sourcing request onto our FIXED catalog of corrugated packaging SKUs for an RFx. You may ONLY select SKUs that appear verbatim in the catalog below. Never invent a new SKU, code, or description — if nothing in the catalog matches, return an empty matched_skus array.
+
+CATALOG (the only valid SKUs, one per line as "SKU: description (ply, GSM, default annual qty)"):
+${renderCatalogForPrompt()}
+
+Line items already in this RFx (do not repeat these): ${input.existingSkus.length > 0 ? input.existingSkus.join(", ") : "none yet"}
+
+Buyer message: "${input.message}"
+
+Rules:
+1. Only return SKUs copied exactly from the catalog above.
+2. If the buyer's request could match more than one catalog item and you cannot tell which they mean (e.g. they said "3-ply boxes" but several 3-ply SKUs exist), do NOT guess among them. Set clarification_needed to a specific, short question listing the candidate SKUs and what distinguishes them, and leave those particular items out of matched_skus. You may still return other SKUs from the same message that ARE unambiguous.
+3. If the buyer states or clearly implies an annual quantity for a specific item, include it as annual_quantity. Otherwise use null and the catalog default will apply.
+4. reply is one short, natural sentence confirming what you understood, written for the buyer to read in a chat.
+5. Never repeat SKUs already listed as existing.`,
+    useCase: "rfx-draft",
+    documentKind: "text-derived",
+  });
+
+  const validMatches: Array<{ sku: string; annual_quantity: number | null }> = [];
+  const droppedHallucinations: string[] = [];
+
+  for (const match of result.data.matched_skus) {
+    if (CATALOG_SKU_SET.has(match.sku)) {
+      validMatches.push({ sku: match.sku, annual_quantity: match.annual_quantity ?? null });
+    } else {
+      droppedHallucinations.push(match.sku);
+    }
+  }
+
+  return {
+    matches: validMatches,
+    reply: result.data.reply || "I've matched what I could to our catalog.",
+    clarification: result.data.clarification_needed,
+    droppedHallucinations,
   };
 }

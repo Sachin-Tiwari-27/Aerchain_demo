@@ -13,6 +13,7 @@ import {
   normalizeExtractedQuote,
   validateMoq,
   runKillerScenario,
+  parseUnitFactor,
 } from "@/procurement/engine";
 
 test("converts currency and units deterministically", () => {
@@ -179,4 +180,14 @@ test("killer scenario output is deterministic across repeated runs", () => {
   assert.equal(first.totalSpend, 22000);
   assert.equal(first.totalSavings, 2500);
   assert.equal(first.vendorsUsed, 2);
+});
+
+test("parseUnitFactor resolves compound units into base unit + factor", () => {
+  assert.deepEqual(parseUnitFactor("1000 units"), { baseUnit: "pcs", factor: 1000 });
+  assert.deepEqual(parseUnitFactor("per piece"), { baseUnit: "pcs", factor: 1 });
+  assert.deepEqual(parseUnitFactor("per 100 pcs"), { baseUnit: "pcs", factor: 100 });
+  assert.deepEqual(parseUnitFactor("kg"), { baseUnit: "kg", factor: 1 });
+  assert.deepEqual(parseUnitFactor("100 kgs"), { baseUnit: "kg", factor: 100 });
+  assert.equal(parseUnitFactor(""), null);
+  assert.equal(parseUnitFactor(null), null);
 });
