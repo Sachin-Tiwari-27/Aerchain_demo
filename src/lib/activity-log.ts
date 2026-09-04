@@ -9,6 +9,16 @@ export type ActivityEntry = {
   status: ActivityStatus;
 };
 
+export function aiLogDetail(model: string, provider: string, detail: string): string {
+  const tags: Record<string, string> = {
+    "gemini-primary": "GP",
+    "gemini-secondary": "GS",
+    "openrouter-primary": "OP",
+    "openrouter-secondary": "OS",
+  };
+  return `[${tags[provider] || "AI"} ${model || "unknown model"}] ${detail}`;
+}
+
 const storageKey = "aerchain:activity-log";
 const eventName = "aerchain:activity-log-updated";
 

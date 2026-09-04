@@ -3,6 +3,12 @@ import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { prepareDocument } from "@/procurement/document-preparation";
 
+const BULK_EXTRACTION_DELAY_MS = Number(process.env.BULK_EXTRACTION_DELAY_MS ?? 2500);
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 function getAdminClient() {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!serviceRoleKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for private document access");
@@ -118,6 +124,7 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const rfxId = String(formData.get("rfxId") ?? "");
+    const processAfterUpload = String(formData.get("processAfterUpload") ?? "false") !== "false";
     const files = formData.getAll("files");
     const vendorIds = formData.getAll("vendorIds").map((value) => String(value));
 
@@ -162,16 +169,39 @@ export async function POST(request: Request) {
     }
 
     const isBulk = resolvedFiles.length > 1;
-    const results = await Promise.allSettled(
+    const uploaded = await Promise.allSettled(
       resolvedFiles.map((file, index) =>
         uploadSingle({ file, vendorId: resolvedVendorIds[index], rfxId, adminClient, uploadedVia: isBulk ? "responses-ui-bulk" : "responses-ui" }),
       ),
     );
 
-    const payload = results.map((result, index) => {
+    const extractionResults: Array<{ filename: string; success: boolean; model?: string; provider?: string; error?: string }> = [];
+    if (processAfterUpload) {
+      await sleep(BULK_EXTRACTION_DELAY_MS);
+      for (let index = 0; index < uploaded.length; index += 1) {
+        const outcome = uploaded[index];
+        const filename = resolvedFiles[index].name;
+        if (outcome.status === "rejected") {
+          extractionResults.push({ filename, success: false, error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason) });
+          continue;
+        }
+        const document = outcome.value;
+        try {
+          const extraction = await runExtraction({ document, vendorId: resolvedVendorIds[index], rfxId });
+          extractionResults.push({ filename, success: true, model: extraction.model, provider: extraction.provider });
+        } catch (error) {
+          extractionResults.push({ filename, success: false, error: error instanceof Error ? error.message : "Extraction failed" });
+        }
+        if (index < uploaded.length - 1) {
+          await sleep(BULK_EXTRACTION_DELAY_MS);
+        }
+      }
+    }
+
+    const payload = uploaded.map((result, index) => {
       const filename = resolvedFiles[index].name;
       if (result.status === "fulfilled") {
-        return { filename, success: true, document: result.value };
+        return { filename, success: true, document: result.value, extraction: extractionResults[index] };
       }
       return {
         filename,
@@ -235,4 +265,36 @@ async function uploadSingle({
     .single();
   if (error) throw new Error(error.message);
   return data;
+}
+
+async function runExtraction({
+  document,
+  vendorId,
+  rfxId,
+}: {
+  document: { id: string; filename: string; file_type: string; extracted_text?: string | null; metadata?: Record<string, unknown> | null };
+  vendorId: string;
+  rfxId: string;
+}) {
+  if (!document?.id) throw new Error("Cannot extract: missing document id");
+  const origin = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const response = await fetch(`${origin}/api/extract`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rfxId,
+      vendorId,
+      documentId: document.id,
+      contentText: document.extracted_text ?? "",
+      mediaBase64: typeof document.metadata?.mediaBase64 === "string" ? document.metadata.mediaBase64 : undefined,
+      mediaType: document.file_type,
+      documentKind: document.file_type === "application/pdf" ? "pdf" : document.file_type?.startsWith("image/") ? "image" : "text-derived",
+      fileName: document.filename,
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.success === false) {
+    throw new Error(payload?.error || `Extraction failed (${response.status})`);
+  }
+  return { model: payload?.metadata?.model, provider: payload?.metadata?.provider };
 }

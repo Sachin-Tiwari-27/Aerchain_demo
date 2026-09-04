@@ -352,6 +352,14 @@ export async function processExtractedQuotes(input: {
   const failedCount = processedQuotes.filter((q) => q.validationStatus === "FAILED").length;
   const ambiguousCount = processedQuotes.filter((q) => q.validationStatus === "AMBIGUOUS").length;
   const missingCount = processedQuotes.filter((q) => q.validationStatus === "MISSING").length;
+  if (processedQuotes.length === 0) {
+    qualificationStatus = "REVIEW";
+    issues.push({
+      issueType: "NO_QUOTES",
+      severity: "ERROR",
+      message: "No extracted quote rows were detected for this supplier",
+    });
+  }
   if ((extraction.lead_time_days ?? 0) > 14) {
     qualificationStatus = "FAILED";
     issues.push({ issueType: "LEAD_TIME", severity: "ERROR", message: `Lead time ${extraction.lead_time_days} days exceeds the 14-day RFx limit` });

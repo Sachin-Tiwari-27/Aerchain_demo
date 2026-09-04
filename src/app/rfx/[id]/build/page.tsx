@@ -33,6 +33,8 @@ export default function BuildPage() {
   const [state, setState] = useState<RfxState | null>(null);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [message, setMessage] = useState("");
+  const [draftName, setDraftName] = useState("");
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [hasExplicitDraftSelection, setHasExplicitDraftSelection] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +60,7 @@ export default function BuildPage() {
           setHasExplicitDraftSelection(Boolean(selectedId));
           window.localStorage.setItem("aerchain:selected-rfx-id", data.data.rfx.id);
           setState(data.data);
+          setDraftName(data.data.rfx.name || "");
           setFeed((current) => [{ time: now(), label: "Draft loaded", detail: "The latest RFx state is ready for review.", tone: "blue" }, ...current]);
         } else setError("No RFx draft found. Create a new RFx to begin.");
       } catch (err) {
@@ -79,6 +82,7 @@ export default function BuildPage() {
       setHasExplicitDraftSelection(true);
       window.localStorage.setItem("aerchain:selected-rfx-id", selectedId);
       setState(data.data);
+      setDraftName(data.data.rfx.name || "");
       setMessages([{ role: "copilot", text: "This draft is selected. Add or clarify items and I will update only this RFx." }]);
       setFeed((current) => [{ time: now(), label: "Draft selected", detail: `Working on ${data.data.rfx.name || "Untitled RFx"}.`, tone: "blue" }, ...current]);
     } catch (err) {
@@ -99,6 +103,7 @@ export default function BuildPage() {
       setHasExplicitDraftSelection(true);
       window.localStorage.setItem("aerchain:selected-rfx-id", data.draft.id);
       setState(data.data);
+      setDraftName(data.draft.name || "");
       setDrafts((current) => [data.draft, ...current]);
       setMessages([{ role: "copilot", text: "New RFx started, empty for now. Tell me what you want to source and I'll match it to our catalog." }]);
       setFeed((current) => [{ time: now(), label: "New draft created", detail: "This conversation is isolated to the new RFx.", tone: "green" }, ...current]);
@@ -106,6 +111,18 @@ export default function BuildPage() {
       setError(err instanceof Error ? err.message : "Could not create RFx");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveDraftName = async () => {
+    if (!rfxId) return;
+    const name = draftName.trim();
+    if (!name || name === state?.rfx?.name) return;
+    const response = await runAction("update_rfx", { updates: { name } });
+    if (response?.name) {
+      setDraftName(response.name);
+      setState((current) => current ? { ...current, rfx: current.rfx ? { ...current.rfx, name: response.name } : current.rfx } : current);
+      setDrafts((current) => current.map((draft) => draft.id === rfxId ? { ...draft, name: response.name } : draft));
     }
   };
 
@@ -213,6 +230,28 @@ export default function BuildPage() {
     }
   };
 
+  const toggleItemSelection = (lineItemId: string) => {
+    setSelectedItemIds((current) => current.includes(lineItemId)
+      ? current.filter((id) => id !== lineItemId)
+      : [...current, lineItemId]);
+  };
+
+  const toggleAllPendingItems = () => {
+    setSelectedItemIds((current) => current.length === pendingItems.length ? [] : pendingItems.map((item) => item.id));
+  };
+
+  const confirmSelectedItems = async () => {
+    const ids = selectedItemIds.filter((id) => pendingItems.some((item) => item.id === id));
+    for (const id of ids) await confirmItem(id);
+    setSelectedItemIds([]);
+  };
+
+  const removeSelectedItems = async () => {
+    const ids = selectedItemIds.filter((id) => pendingItems.some((item) => item.id === id));
+    for (const id of ids) await removeItem(id);
+    setSelectedItemIds([]);
+  };
+
   const approve = async () => {
     if (!rfxId) return;
 
@@ -265,7 +304,7 @@ export default function BuildPage() {
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-4 border-b border-slate-200 pb-5 lg:flex-row lg:items-center lg:justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-950">New sourcing event</h1>
+        <div className="min-w-0"><label htmlFor="rfx-name" className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">RFx name</label><input id="rfx-name" value={draftName} onChange={(event) => setDraftName(event.target.value)} onBlur={() => void saveDraftName()} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} placeholder="Name this sourcing event" className="mt-1 block w-full max-w-md border-0 border-b border-slate-300 bg-transparent px-0 py-1 text-2xl font-semibold tracking-tight text-slate-950 outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-0" /></div>
         <div className="flex flex-wrap items-center justify-end gap-2"><select value={rfxId ?? ""} onChange={(event) => void selectDraft(event.target.value)} disabled={loading || drafts.length === 0} aria-label="Select RFx draft" className="max-w-55 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700"><option value="">Select draft</option>{drafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.name || "Untitled RFx"}</option>)}</select><button onClick={() => void createNewRfx()} disabled={loading} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">New RFx</button><button onClick={() => void loadDemoCatalog()} disabled={loading || !rfxId} title="Bypasses the conversation. For demo purposes only." className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-500 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50">Load full demo catalog</button></div>
       </header>
 
@@ -288,11 +327,12 @@ export default function BuildPage() {
 
             {pendingItems.length > 0 && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                <div className="flex items-center justify-between"><h3 className="font-semibold text-amber-900">Needs your confirmation</h3><span className="text-xs font-semibold text-amber-700">{pendingItems.length} item(s)</span></div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-3"><input type="checkbox" checked={selectedItemIds.length === pendingItems.length} onChange={toggleAllPendingItems} aria-label="Select all pending items" className="h-4 w-4 accent-amber-600" /><h3 className="font-semibold text-amber-900">Needs your confirmation</h3><span className="text-xs font-semibold text-amber-700">{pendingItems.length} item(s)</span></div><div className="flex gap-2"><button onClick={() => void confirmSelectedItems()} disabled={loading || selectedItemIds.length === 0} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Confirm selected</button><button onClick={() => void removeSelectedItems()} disabled={loading || selectedItemIds.length === 0} className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:border-rose-300 hover:text-rose-700 disabled:opacity-50">Remove selected</button></div></div>
                 <p className="mt-1 text-xs text-amber-800">The copilot matched these from the catalog. Nothing here is part of the RFx until you confirm it.</p>
                 <div className="mt-3 space-y-2">
                   {pendingItems.map((item) => (
                     <div key={item.id} className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-white px-3 py-2">
+                      <input type="checkbox" checked={selectedItemIds.includes(item.id)} onChange={() => toggleItemSelection(item.id)} aria-label={`Select ${item.sku}`} className="h-4 w-4 shrink-0 accent-amber-600" />
                       <div className="min-w-0">
                         <p className="font-mono text-xs font-bold text-sky-700">{item.sku}</p>
                         <p className="truncate text-sm text-slate-700">{item.description}</p>

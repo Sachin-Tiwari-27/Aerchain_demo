@@ -127,6 +127,7 @@ export function BulkUploader({ rfxId, vendors, onUploaded }: BulkUploaderProps) 
 
     const formData = new FormData();
     formData.append("rfxId", rfxId);
+    formData.append("processAfterUpload", "false");
     for (const row of ready) {
       formData.append("files", row.file);
       formData.append("vendorIds", row.vendorId);
@@ -142,17 +143,18 @@ export function BulkUploader({ rfxId, vendors, onUploaded }: BulkUploaderProps) 
         throw new Error(payload?.error || `Upload failed (${response.status})`);
       }
 
-      const results: Array<{ filename: string; success: boolean; document?: UploadedDocument; error?: string }> =
+      const results: Array<{ filename: string; success: boolean; document?: UploadedDocument; error?: string; extraction?: { success: boolean; model?: string; provider?: string; error?: string } }> =
         payload.results ?? [];
 
-      const uploadedDocs: UploadedDocument[] = [];
+      const uploadedDocs = results.flatMap((result) =>
+        result.success && result.document ? [result.document] : [],
+      );
       setStaging((current) =>
         current.map((row) => {
           if (row.status === "success") return row;
           const match = results.find((r) => r.filename === row.file.name);
           if (!match) return row;
           if (match.success && match.document) {
-            uploadedDocs.push(match.document);
             return { ...row, status: "success" };
           }
           return { ...row, status: "error", error: match.error || "Upload failed" };
@@ -167,6 +169,7 @@ export function BulkUploader({ rfxId, vendors, onUploaded }: BulkUploaderProps) 
       );
 
       if (uploadedDocs.length > 0) onUploaded(uploadedDocs);
+
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload failed";
       recordActivity("Responses", "Bulk upload failed", message, "error");

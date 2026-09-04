@@ -14,9 +14,9 @@ The provider abstraction in `src/ai/provider.ts` now exposes five distinct use-c
 | 5 | `analyst-recommendation` | `/api/analyst-tool` `recommend_award` (scenario -> buyer-facing narrative) | `GEMINI_ANALYST_RECOMMENDATION_PRIMARY_MODEL`, `GEMINI_ANALYST_RECOMMENDATION_SECONDARY_MODEL` |
 
 ## Provider chain policy
-- Procurement-signal use-cases (`rfx-json`, `analyst-intent`, `analyst-recommendation`) are Gemini-only. No OpenRouter fallback is used.
-- `image-parse` keeps the full Gemini -> OpenRouter chain because it is the only multi-modal flow and benefits from extra resilience.
-- `rfx-draft` uses a custom chain: `openrouter-primary` (default `minimax/minimax-m3:free`) -> `gemini-primary` -> `gemini-secondary`. There is no openrouter-secondary for rfx-draft by design, to keep drafts cheap. If `OPENROUTER_RFX_DRAFT_PRIMARY_MODEL` is empty or the OpenRouter key is missing, the chain skips straight to Gemini.
+- All standard use-cases use `gemini-primary` -> `gemini-secondary` -> `openrouter-primary` -> `openrouter-secondary`.
+- `rfx-draft` starts with `openrouter-primary` -> `openrouter-secondary`, then falls back to `gemini-primary` -> `gemini-secondary`.
+- The default OpenRouter pair is `minimax/minimax-m3:free` -> `nvidia/nemotron-3-ultra-550b-a55b:free`.
 
 ## Default model picks
 - `image-parse` primary: `gemini-3.7-flash` (vision capable).

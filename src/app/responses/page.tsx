@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { RfxContextBar } from "@/components/layout/rfx-context-bar";
 import { BulkUploader, type UploadedDocument } from "@/components/responses/bulk-uploader";
-import { recordActivity } from "@/lib/activity-log";
+import { aiLogDetail, recordActivity } from "@/lib/activity-log";
 
 interface VendorDocument {
   id: string;
@@ -36,6 +36,7 @@ interface ExtractionResult {
 }
 
 export default function ResponsesPage() {
+  const EXTRACTION_CONCURRENCY = 2;
   const [documents, setDocuments] = useState<VendorDocument[]>([]);
   const [vendors, setVendors] = useState<Record<string, Vendor>>({});
   const [loading, setLoading] = useState(true);
@@ -44,6 +45,7 @@ export default function ResponsesPage() {
   const [rfxName, setRfxName] = useState("Selected RFx");
   const [extracting, setExtracting] = useState<Record<string, boolean>>({});
   const [deleting, setDeleting] = useState<Record<string, boolean>>({});
+  const [extractionRun, setExtractionRun] = useState<{ total: number; completed: number; failed: number } | null>(null);
   const [approvedNotice, setApprovedNotice] = useState<string | null>(() =>
     typeof window === "undefined" ? null : window.sessionStorage.getItem("aerchain:just-approved"),
   );
@@ -128,9 +130,9 @@ export default function ResponsesPage() {
     fetchData();
   }, []);
 
-  const handleExtract = async (docId: string) => {
-    const doc = documents.find((d) => d.id === docId);
-    if (!doc) return;
+  const handleExtract = async (docId: string, documentOverride?: VendorDocument) => {
+    const doc = documentOverride ?? documents.find((d) => d.id === docId);
+    if (!doc) return false;
 
     setExtracting((prev) => ({ ...prev, [docId]: true }));
     recordActivity("Responses", "Extraction requested", doc.filename, "running");
@@ -155,7 +157,10 @@ export default function ResponsesPage() {
       const result: ExtractionResult = await response.json();
 
       if (result.success) {
-        recordActivity("Responses", "Extraction completed", doc.filename, "success");
+        const modelDetail = result.metadata
+          ? aiLogDetail(result.metadata.model, result.metadata.provider, doc.filename)
+          : doc.filename;
+        recordActivity("Responses", "Extraction completed", modelDetail, "success");
         // Refresh documents list
         setDocuments((prev) =>
           prev.map((d) =>
@@ -164,12 +169,14 @@ export default function ResponsesPage() {
               : d,
           ),
         );
+        return true;
       } else {
         recordActivity("Responses", "Extraction failed", result.error || doc.filename, "error");
         setDocuments((prev) =>
           prev.map((d) => (d.id === docId ? { ...d, processing_status: "ERROR" } : d)),
         );
         console.error("Extraction failed:", result.error);
+        return false;
       }
     } catch (error) {
       recordActivity("Responses", "Extraction failed", error instanceof Error ? error.message : "Extraction request failed", "error");
@@ -177,9 +184,31 @@ export default function ResponsesPage() {
       setDocuments((prev) =>
         prev.map((d) => (d.id === docId ? { ...d, processing_status: "ERROR" } : d)),
       );
+      return false;
     } finally {
       setExtracting((prev) => ({ ...prev, [docId]: false }));
     }
+  };
+
+  const extractUploadedDocuments = async (uploadedDocs: UploadedDocument[]) => {
+    const queue = [...uploadedDocs];
+    let completed = 0;
+    let failed = 0;
+    setExtractionRun({ total: queue.length, completed: 0, failed: 0 });
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        const document = queue.shift();
+        if (!document) return;
+        const succeeded = await handleExtract(document.id, document);
+        completed += 1;
+        if (!succeeded) failed += 1;
+        setExtractionRun({ total: uploadedDocs.length, completed, failed });
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(EXTRACTION_CONCURRENCY, queue.length) }, () => worker()));
+    window.setTimeout(() => setExtractionRun(null), 2500);
   };
 
   const viewOriginal = async (documentId: string, storagePath: string | null) => {
@@ -274,8 +303,22 @@ export default function ResponsesPage() {
       <BulkUploader
         rfxId={rfxId}
         vendors={Object.values(vendors)}
-        onUploaded={(newDocuments: UploadedDocument[]) => setDocuments((current) => [...current, ...newDocuments])}
+        onUploaded={(newDocuments: UploadedDocument[]) => {
+          setDocuments((current) => [...current, ...newDocuments]);
+          void extractUploadedDocuments(newDocuments);
+        }}
       />
+
+      {extractionRun && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          <div className="flex items-center justify-between gap-4">
+            <p className="font-semibold">Extracting responses</p>
+            <span>{extractionRun.completed} of {extractionRun.total} complete{extractionRun.failed > 0 ? ` · ${extractionRun.failed} failed` : ""}</span>
+          </div>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-sky-100"><div className="h-full rounded-full bg-sky-600 transition-all" style={{ width: `${(extractionRun.completed / extractionRun.total) * 100}%` }} /></div>
+          <p className="mt-2 text-xs text-sky-700">Two documents are processed at a time to avoid overloading the model provider.</p>
+        </div>
+      )}
 
       {documents.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
@@ -305,7 +348,7 @@ export default function ResponsesPage() {
                     <td className="px-6 py-3 text-slate-500 text-xs">{doc.file_type}</td>
                     <td className="px-6 py-3">
                       <span className={`inline-block rounded px-2.5 py-1 text-xs font-medium ${getStatusColor(doc.processing_status)}`}>
-                        {doc.processing_status}
+                        {extracting[doc.id] ? "EXTRACTING" : doc.processing_status}
                       </span>
                     </td>
                     <td className="px-6 py-3 text-center">

@@ -48,7 +48,13 @@ export async function prepareDocument(file: File): Promise<PreparedDocument> {
       const sheet = workbook.Sheets[sheetName];
       return `SHEET: ${sheetName}\n${XLSX.utils.sheet_to_csv(sheet)}`;
     }).join("\n\n");
-    return { documentKind, mediaType, contentText, originalSize: file.size };
+    return {
+      documentKind,
+      mediaType,
+      contentText,
+      mediaBase64: Buffer.from(bytes).toString("base64"),
+      originalSize: file.size,
+    };
   }
 
   return {

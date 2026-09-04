@@ -51,6 +51,7 @@ export async function POST(req: NextRequest) {
     let resolvedToolName = toolName;
     let aiReply = null;
     let provenance = null;
+    let model = null;
     if (!resolvedToolName && typeof question === "string" && question.trim()) {
       const interpretation = await generateStructured({
         schema: z.object({
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
       resolvedToolName = resolveAnalystTool(interpretation.data.toolName, question);
       aiReply = interpretation.data.reply;
       provenance = interpretation.provenance;
+      model = interpretation.model;
     }
 
     if (!rfxId || !resolvedToolName) {
@@ -118,6 +120,7 @@ export async function POST(req: NextRequest) {
         };
         let recommendationData = fallbackRecommendation;
         let recommendationProvenance = null;
+        let recommendationModel = null;
         try {
           const recommendation = await generateStructured({
             schema: z.object({
@@ -142,6 +145,7 @@ export async function POST(req: NextRequest) {
             risks: recommendation.data.risks.map(readableRecommendation),
           };
           recommendationProvenance = recommendation.provenance;
+          recommendationModel = recommendation.model;
         } catch {
           recommendationData = fallbackRecommendation;
         }
@@ -151,6 +155,7 @@ export async function POST(req: NextRequest) {
           data: { scenario: scenario.data, recommendation: recommendationData },
         };
         provenance = recommendationProvenance;
+        model = recommendationModel;
         break;
       }
       case "calculate_savings":
@@ -198,7 +203,7 @@ export async function POST(req: NextRequest) {
         );
     }
 
-    return NextResponse.json({ ...result, question, selectedTool: resolvedToolName, aiReply, provenance });
+    return NextResponse.json({ ...result, question, selectedTool: resolvedToolName, aiReply, provenance, model });
   } catch (error) {
     console.error("Tool execution error:", error);
     return NextResponse.json(

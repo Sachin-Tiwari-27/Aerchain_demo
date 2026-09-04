@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { RfxContextBar } from "@/components/layout/rfx-context-bar";
-import { recordActivity } from "@/lib/activity-log";
+import { aiLogDetail, recordActivity } from "@/lib/activity-log";
 
 const SUGGESTED_QUESTIONS = [
   {
@@ -121,8 +121,10 @@ export default function AskPage() {
         setChatMessages((current) => [...current, { role: "analyst", text: "I couldn't complete that analysis. Open the System log in the top navigation for technical details." }]);
       } else {
         setResult(data);
-        const provider = data.provenance?.usedProvider ? ` via ${data.provenance.usedProvider}${data.model ? ` (${data.model})` : ""}` : "";
-        addLog("Tool completed", `${data.selectedTool || toolName}${provider}`, "success");
+        const detail = data.provenance?.usedProvider
+          ? aiLogDetail(data.model, data.provenance.usedProvider, data.selectedTool || toolName)
+          : data.selectedTool || toolName;
+        addLog("Tool completed", detail, "success");
         setChatMessages((current) => [...current, { role: "analyst", text: data.aiReply || `Analysis complete: ${toolName.replace(/_/g, " ")}. Review the evidence below.` }]);
       }
     } catch (err) {

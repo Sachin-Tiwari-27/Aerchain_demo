@@ -15,11 +15,13 @@ Never commit `.env.local` or expose `GOOGLE_API_KEY` and service-role credential
 
 There are five use-cases, each with its own primary/secondary model env vars:
 
-- `image-parse` (image/PDF extraction) — multi-modal, full Gemini -> OpenRouter chain.
-- `rfx-json` (text-derived quote extraction) — strict, Gemini-only.
-- `rfx-draft` (RFx builder from a buyer message) — OpenRouter first, then Gemini fallback. Default primary is `minimax/minimax-m3:free`; falls back to `GEMINI_RFX_DRAFT_PRIMARY_MODEL` then `GEMINI_RFX_DRAFT_SECONDARY_MODEL`. No openrouter-secondary.
-- `analyst-intent` (analyst question to tool name) — classifier, Gemini-only.
-- `analyst-recommendation` (award narrative) — long-form prose, Gemini-only.
+- `image-parse` (image/PDF extraction) — Gemini primary/secondary, then OpenRouter primary/secondary.
+- `rfx-json` (text-derived quote extraction) — Gemini primary/secondary, then OpenRouter primary/secondary.
+- `rfx-draft` (RFx builder from a buyer message) — OpenRouter primary/secondary first, then Gemini primary/secondary.
+- `analyst-intent` (analyst question to tool name) — Gemini primary/secondary, then OpenRouter primary/secondary.
+- `analyst-recommendation` (award narrative) — Gemini primary/secondary, then OpenRouter primary/secondary.
+
+The default OpenRouter pair is `minimax/minimax-m3:free` followed by `nvidia/nemotron-3-ultra-550b-a55b:free`.
 
 ## Routes
 

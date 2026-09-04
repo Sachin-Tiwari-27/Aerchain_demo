@@ -2,6 +2,15 @@ import { z } from "zod";
 
 export type DocumentKind = "image" | "pdf" | "text-derived";
 export type ProviderName = "gemini-primary" | "gemini-secondary" | "openrouter-primary" | "openrouter-secondary";
+
+export function providerTag(provider: ProviderName): "GP" | "GS" | "OP" | "OS" {
+  switch (provider) {
+    case "gemini-primary": return "GP";
+    case "gemini-secondary": return "GS";
+    case "openrouter-primary": return "OP";
+    case "openrouter-secondary": return "OS";
+  }
+}
 export type UseCase =
   | "image-parse"
   | "rfx-json"
@@ -45,26 +54,32 @@ function getEnv() {
     // Image parse models
     geminiImagePrimaryModel: process.env.GEMINI_IMAGE_PRIMARY_MODEL ?? "",
     geminiImageSecondaryModel: process.env.GEMINI_IMAGE_SECONDARY_MODEL ?? "",
-    openRouterImagePrimaryModel: process.env.OPENROUTER_IMAGE_PRIMARY_MODEL ?? "",
-    openRouterImageSecondaryModel: process.env.OPENROUTER_IMAGE_SECONDARY_MODEL ?? "",
+    openRouterImagePrimaryModel: process.env.OPENROUTER_IMAGE_PRIMARY_MODEL ?? "minimax/minimax-m3:free",
+    openRouterImageSecondaryModel: process.env.OPENROUTER_IMAGE_SECONDARY_MODEL ?? "nvidia/nemotron-3-ultra-550b-a55b:free",
     // RFx JSON models (strict text-derived extraction + RFx structurer)
     geminiRfxPrimaryModel: process.env.GEMINI_RFX_PRIMARY_MODEL ?? "",
     geminiRfxSecondaryModel: process.env.GEMINI_RFX_SECONDARY_MODEL ?? "",
-    openRouterRfxPrimaryModel: process.env.OPENROUTER_RFX_PRIMARY_MODEL ?? "",
-    openRouterRfxSecondaryModel: process.env.OPENROUTER_RFX_SECONDARY_MODEL ?? "",
+    openRouterRfxPrimaryModel: process.env.OPENROUTER_RFX_PRIMARY_MODEL ?? "minimax/minimax-m3:free",
+    openRouterRfxSecondaryModel: process.env.OPENROUTER_RFX_SECONDARY_MODEL ?? "nvidia/nemotron-3-ultra-550b-a55b:free",
     // RFx drafting (conversational buyer message -> RFx description/category)
     geminiRfxDraftPrimaryModel: process.env.GEMINI_RFX_DRAFT_PRIMARY_MODEL ?? "gemini-3.5-flash",
     geminiRfxDraftSecondaryModel: process.env.GEMINI_RFX_DRAFT_SECONDARY_MODEL ?? "gemini-3.5-flash-lite",
     openRouterRfxDraftPrimaryModel: process.env.OPENROUTER_RFX_DRAFT_PRIMARY_MODEL ?? "minimax/minimax-m3:free",
+    openRouterRfxDraftSecondaryModel: process.env.OPENROUTER_RFX_DRAFT_SECONDARY_MODEL ?? "nvidia/nemotron-3-ultra-550b-a55b:free",
     // Analyst intent routing (question -> tool name)
     geminiAnalystIntentPrimaryModel: process.env.GEMINI_ANALYST_INTENT_PRIMARY_MODEL || "gemini-3.5-flash-lite",
     geminiAnalystIntentSecondaryModel: process.env.GEMINI_ANALYST_INTENT_SECONDARY_MODEL || "gemini-3.5-flash-lite",
     openRouterAnalystIntentPrimaryModel: process.env.OPENROUTER_ANALYST_INTENT_PRIMARY_MODEL || process.env.OPENROUTER_RFX_DRAFT_PRIMARY_MODEL || "minimax/minimax-m3:free",
+    openRouterAnalystIntentSecondaryModel: process.env.OPENROUTER_ANALYST_INTENT_SECONDARY_MODEL || "nvidia/nemotron-3-ultra-550b-a55b:free",
     // Analyst recommendation (award narrative)
     geminiAnalystRecommendationPrimaryModel:
       process.env.GEMINI_ANALYST_RECOMMENDATION_PRIMARY_MODEL ?? "",
     geminiAnalystRecommendationSecondaryModel:
-      process.env.GEMINI_ANALYST_RECOMMENDATION_SECONDARY_MODEL ?? "",
+      process.env.GEMINI_ANALYST_RECOMMENDATION_SECONDARY_MODEL ?? "gemini-3.5-flash-lite",
+    openRouterAnalystRecommendationPrimaryModel:
+      process.env.OPENROUTER_ANALYST_RECOMMENDATION_PRIMARY_MODEL ?? "minimax/minimax-m3:free",
+    openRouterAnalystRecommendationSecondaryModel:
+      process.env.OPENROUTER_ANALYST_RECOMMENDATION_SECONDARY_MODEL ?? "nvidia/nemotron-3-ultra-550b-a55b:free",
   };
 }
 
@@ -73,47 +88,23 @@ function getProviderChain(useCase: UseCase): ProviderName[] {
   const hasGoogle = !!env.googleApiKey;
   const hasOpenRouter = !!env.openRouterApiKey;
 
-  // Procurement-signal use-cases: Gemini only (primary -> secondary).
-  // Never fall back to OpenRouter for these to preserve extraction quality
-  // and keep buyer-facing procurement logic on a single vendor.
-  const geminiOnlyUseCases: UseCase[] = ["rfx-json", "analyst-recommendation"];
-
-  if (geminiOnlyUseCases.includes(useCase)) {
-    return hasGoogle ? ["gemini-primary", "gemini-secondary"] : [];
-  }
-
-  if (useCase === "analyst-intent") {
-    const chain: ProviderName[] = [];
-    if (hasGoogle && env.geminiAnalystIntentPrimaryModel) chain.push("gemini-primary");
-    if (hasGoogle && env.geminiAnalystIntentSecondaryModel) chain.push("gemini-secondary");
-    if (hasOpenRouter && env.openRouterAnalystIntentPrimaryModel) chain.push("openrouter-primary");
-    return chain;
-  }
-
-  // rfx-draft is conversational and has its own chain:
-  // openrouter-primary (free MiniMax) -> gemini-primary -> gemini-secondary.
-  // We skip openrouter-secondary by design to keep drafts cheap.
+  // RFx drafting starts with OpenRouter, then falls back through OpenRouter
+  // secondary and both Gemini models.
   if (useCase === "rfx-draft") {
     const chain: ProviderName[] = [];
-    if (hasOpenRouter && env.openRouterRfxDraftPrimaryModel) {
-      chain.push("openrouter-primary");
-    }
-    if (hasGoogle) {
-      chain.push("gemini-primary", "gemini-secondary");
-    }
+    if (hasOpenRouter && env.openRouterRfxDraftPrimaryModel) chain.push("openrouter-primary");
+    if (hasOpenRouter && env.openRouterRfxDraftSecondaryModel) chain.push("openrouter-secondary");
+    if (hasGoogle && env.geminiRfxDraftPrimaryModel) chain.push("gemini-primary");
+    if (hasGoogle && env.geminiRfxDraftSecondaryModel) chain.push("gemini-secondary");
     return chain;
   }
 
-  // For image parsing, allow full chain if available.
-  if (!hasGoogle) {
-    return hasOpenRouter ? ["openrouter-primary", "openrouter-secondary"] : [];
-  }
-
-  if (!hasOpenRouter) {
-    return ["gemini-primary", "gemini-secondary"];
-  }
-
-  return ["gemini-primary", "gemini-secondary", "openrouter-primary", "openrouter-secondary"];
+  // All other tasks use the shared Gemini-primary -> Gemini-secondary ->
+  // OpenRouter-primary -> OpenRouter-secondary fallback order.
+  const chain: ProviderName[] = [];
+  if (hasGoogle) chain.push("gemini-primary", "gemini-secondary");
+  if (hasOpenRouter) chain.push("openrouter-primary", "openrouter-secondary");
+  return chain;
 }
 
 function getModel(provider: ProviderName, useCase: UseCase): string {
@@ -153,7 +144,7 @@ function getModel(provider: ProviderName, useCase: UseCase): string {
         case "openrouter-primary":
           return env.openRouterRfxDraftPrimaryModel;
         case "openrouter-secondary":
-          return env.openRouterRfxDraftPrimaryModel;
+          return env.openRouterRfxDraftSecondaryModel;
       }
       break;
     case "analyst-intent":
@@ -165,7 +156,7 @@ function getModel(provider: ProviderName, useCase: UseCase): string {
         case "openrouter-primary":
           return env.openRouterAnalystIntentPrimaryModel;
         case "openrouter-secondary":
-          return env.openRouterAnalystIntentPrimaryModel;
+          return env.openRouterAnalystIntentSecondaryModel;
       }
       break;
     case "analyst-recommendation":
@@ -175,9 +166,9 @@ function getModel(provider: ProviderName, useCase: UseCase): string {
         case "gemini-secondary":
           return env.geminiAnalystRecommendationSecondaryModel;
         case "openrouter-primary":
-          return env.openRouterRfxPrimaryModel;
+          return env.openRouterAnalystRecommendationPrimaryModel;
         case "openrouter-secondary":
-          return env.openRouterRfxSecondaryModel;
+          return env.openRouterAnalystRecommendationSecondaryModel;
       }
       break;
   }
@@ -355,11 +346,15 @@ export async function generateStructured<T>({
 }: GenerateStructuredOptions<T>): Promise<StructuredGenerationResult<T>> {
   const chain = getProviderChain(useCase);
   let lastError: unknown;
+  let lastProvider: ProviderName | null = null;
+  let lastModel = "";
   let schemaFailed = false;
 
   for (const provider of chain) {
     if (schemaFailed) break;
     const model = getModel(provider, useCase);
+    lastProvider = provider;
+    lastModel = model;
 
     const attempts = [prompt, strictifyPrompt(prompt)];
 
@@ -408,7 +403,7 @@ export async function generateStructured<T>({
   }
 
   throw new Error(
-    `No provider in the chain produced a valid extraction for ${useCase}. Last error: ${
+    `No provider in the chain produced a valid extraction for ${useCase} [${lastProvider ? providerTag(lastProvider) : "AI"} ${lastModel || "unknown model"}]. Last error: ${
       lastError instanceof Error ? lastError.message : String(lastError)
     }`,
   );

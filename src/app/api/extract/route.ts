@@ -23,12 +23,18 @@ export async function POST(req: Request) {
 
     const prompt = `Extract structured supplier pricing information from the following document.\n\nRules:\n1. Distinguish explicit (directly stated), derived (calculated/inferred), ambiguous (unclear), and missing prices.\n2. Keep only seller-supplied values; do not invent values.\n3. For each quote, record: SKU reference, description, price, unit, currency, conditions, confidence score, and source reference.\n4. If a price is not directly stated, use null and record the reason in exceptions.\n5. Return JSON matching the vendor extraction schema.\n\nDocument content:\n${input.contentText || (input.mediaBase64 ? "Inspect the attached binary document directly." : "(empty document)")}`;
 
+    const extension = input.fileName.toLowerCase().split(".").pop() ?? "";
+    const isSpreadsheet = ["xlsx", "xls", "xlsm"].includes(extension)
+      || input.mediaType?.includes("spreadsheet")
+      || input.mediaType?.includes("excel");
+    const isMultimodal = input.documentKind === "image" || input.documentKind === "pdf" || isSpreadsheet;
+
     // Call the provider abstraction
     const result = await generateStructured({
       schema: vendorQuoteExtractionSchema,
       prompt,
       documentKind: input.documentKind,
-      useCase: input.documentKind === "text-derived" ? "rfx-json" : "image-parse",
+      useCase: isMultimodal ? "image-parse" : "rfx-json",
       media: input.mediaBase64 && input.mediaType
         ? { mimeType: input.mediaType, data: input.mediaBase64 }
         : undefined,
