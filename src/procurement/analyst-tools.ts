@@ -2,6 +2,7 @@
  * Analyst tools: deterministic functions that answer procurement questions.
  * LLM calls these, never recalculates numbers — LLM explains the results only.
  */
+import { parseUnitFactor } from "@/procurement/normalization";
 
 export type AnalystToolResult = {
   toolName: string;
@@ -9,6 +10,26 @@ export type AnalystToolResult = {
   data?: unknown;
   error?: string;
 };
+
+/** Keep financial calculations on the exact unit and currency requested by the RFx. */
+function quotesMatchingComparisonBasis(
+  quotes: any[],
+  lineItems: any[],
+  rfxCurrency: string | null | undefined,
+): any[] {
+  const targetCurrency = rfxCurrency?.toUpperCase() || "INR";
+  const targetUnitByLineItem = new Map(
+    lineItems.map((lineItem) => [
+      lineItem.id,
+      parseUnitFactor(lineItem.unit)?.baseUnit ?? (lineItem.unit?.trim().toLowerCase() || "pcs"),
+    ]),
+  );
+
+  return quotes.filter((quote) =>
+    quote.normalized_currency?.toUpperCase() === targetCurrency
+    && quote.normalized_unit?.toLowerCase() === targetUnitByLineItem.get(quote.line_item_id),
+  );
+}
 
 /**
  * Tool: Get vendor comparison matrix (best price per SKU)
@@ -161,13 +182,22 @@ export async function runAwardScenario(
       .eq("validation_status", "VALID")
       .not("normalized_price", "is", null);
 
-    const qualifiedQuotes = (quotes || []).filter((q: any) => qualifiedVendorIds.has(q.vendor_id));
+    let qualifiedQuotes: any[] = [];
 
     // Get line items for reference
     const { data: lineItems } = await supabase
       .from("rfx_line_items")
-      .select("id, sku, description, annual_quantity")
+      .select("id, sku, description, annual_quantity, unit")
       .eq("rfx_id", rfxId);
+
+    const { data: rfx } = await supabase
+      .from("rfxs")
+      .select("currency")
+      .eq("id", rfxId)
+      .maybeSingle();
+
+    const comparableQuotes = quotesMatchingComparisonBasis(quotes || [], lineItems || [], rfx?.currency);
+    qualifiedQuotes = comparableQuotes.filter((q: any) => qualifiedVendorIds.has(q.vendor_id));
 
     // Get vendors for names
     const { data: vendors } = await supabase.from("vendors").select("id, name");
@@ -314,8 +344,16 @@ export async function calculateSavingsView(
 
     const { data: lineItems } = await supabase
       .from("rfx_line_items")
-      .select("id, annual_quantity")
+      .select("id, annual_quantity, unit")
       .eq("rfx_id", rfxId);
+
+    const { data: rfx } = await supabase
+      .from("rfxs")
+      .select("currency")
+      .eq("id", rfxId)
+      .maybeSingle();
+
+    const comparableQuotes = quotesMatchingComparisonBasis(quotes || [], lineItems || [], rfx?.currency);
 
     const { data: contractPrices } = await supabase
       .from("current_contract_prices")
@@ -331,7 +369,7 @@ export async function calculateSavingsView(
     let totalCurrentCost = 0;
 
     (lineItems || []).forEach((li: any) => {
-      const skuQuotes = (quotes || []).filter((q: any) => q.line_item_id === li.id);
+      const skuQuotes = comparableQuotes.filter((q: any) => q.line_item_id === li.id);
       if (skuQuotes.length === 0) return;
 
       const cheapest = skuQuotes.reduce((a: any, b: any) =>

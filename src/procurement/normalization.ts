@@ -112,6 +112,9 @@ export function normalizeExtractedQuote(input: {
   normalizedPrice?: number;
   normalizedCurrency?: string;
   normalizedUnit?: string;
+  conversionMethod?: string;
+  conversionRate?: number;
+  conversionBasis?: string;
   reason?: string;
 } {
   const targetCurrency = (input.targetCurrency ?? input.currency ?? "INR").toUpperCase() as CurrencyCode;
@@ -122,43 +125,38 @@ export function normalizeExtractedQuote(input: {
     return { status: "missing", reason: "No price supplied" };
   }
 
+  const numericPrice = typeof input.price === "string" ? Number(input.price.trim()) : Number(input.price);
   if (typeof input.price === "string") {
     const trimmed = input.price.trim();
     if (!trimmed || /same as last year|approx|estimate|n\/a|about/i.test(trimmed)) {
       return { status: "ambiguous", reason: "Price is ambiguous or non-committal" };
     }
 
-    const numericValue = Number(trimmed);
-    if (!Number.isFinite(numericValue)) {
+    if (!Number.isFinite(numericPrice)) {
       return { status: "ambiguous", reason: "Price is not a valid numeric value" };
     }
-
-    const converted = normalizeCurrency(
-      numericValue,
-      (input.currency ?? "INR").toUpperCase() as CurrencyCode,
-      targetCurrency,
-    );
-    const pricePerBase = sourceUnitFactor !== 1 ? converted / sourceUnitFactor : converted;
-    return {
-      status: "valid",
-      normalizedPrice: Number(pricePerBase.toFixed(2)),
-      normalizedCurrency: targetCurrency,
-      normalizedUnit: targetUnit,
-    };
   }
 
-  if (typeof input.unit === "string" && input.unit.toLowerCase() === "kg" && targetUnit === "pcs") {
+  if (!Number.isFinite(numericPrice) || numericPrice < 0) {
+    return { status: "failed", reason: "Price is invalid" };
+  }
+
+  const sourceCurrency = (input.currency ?? "INR").toUpperCase() as CurrencyCode;
+  const sourceUnit = canonicalUnit(input.unit ?? "pcs");
+  const isMassToPiece = ["kg", "g", "lb"].includes(sourceUnit) && targetUnit === "pcs";
+  if (isMassToPiece) {
     if (typeof input.pieceMassKg !== "number" || !Number.isFinite(input.pieceMassKg) || input.pieceMassKg <= 0) {
       return {
         status: "ambiguous",
-        reason: "kg price requires explicit piece mass or conversion basis to normalize to pcs",
+        reason: `${sourceUnit} price requires an explicit mass-per-piece conversion basis to normalize to pcs`,
       };
     }
 
-    const piecePrice = Number(input.price) * input.pieceMassKg;
+    const massPerPieceInSourceUnit = normalizeUnit(input.pieceMassKg, "kg", sourceUnit as UnitCode);
+    const piecePrice = (numericPrice / sourceUnitFactor) * massPerPieceInSourceUnit;
     const converted = normalizeCurrency(
       piecePrice,
-      (input.currency ?? "INR").toUpperCase() as CurrencyCode,
+      sourceCurrency,
       targetCurrency,
     );
     return {
@@ -166,26 +164,37 @@ export function normalizeExtractedQuote(input: {
       normalizedPrice: Number(converted.toFixed(2)),
       normalizedCurrency: targetCurrency,
       normalizedUnit: targetUnit,
+      conversionMethod: sourceCurrency === targetCurrency ? "MASS_PER_PIECE" : "MASS_PER_PIECE_AND_CURRENCY_FX",
+      conversionRate: Number((converted / numericPrice).toFixed(8)),
+      conversionBasis: `${input.pieceMassKg} kg per piece; price quoted per ${sourceUnitFactor} ${sourceUnit}; converted to ${targetCurrency} per ${targetUnit}`,
     };
-  }
-
-  const numericPrice = Number(input.price);
-  if (!Number.isFinite(numericPrice) || numericPrice < 0) {
-    return { status: "failed", reason: "Price is invalid" };
   }
 
   const converted = normalizeCurrency(
     numericPrice,
-    (input.currency ?? "INR").toUpperCase() as CurrencyCode,
+    sourceCurrency,
     targetCurrency,
   );
 
   const pricePerBase = sourceUnitFactor !== 1 ? converted / sourceUnitFactor : converted;
+  const conversionDetails = [
+    sourceCurrency !== targetCurrency ? `${sourceCurrency} to ${targetCurrency} FX` : null,
+    sourceUnitFactor !== 1 ? `price quoted per ${sourceUnitFactor} ${sourceUnit}` : null,
+  ].filter(Boolean);
 
   return {
     status: "valid",
     normalizedPrice: Number(pricePerBase.toFixed(2)),
     normalizedCurrency: targetCurrency,
     normalizedUnit: targetUnit,
+    conversionMethod: conversionDetails.length === 0
+      ? "NONE"
+      : sourceCurrency !== targetCurrency && sourceUnitFactor !== 1
+        ? "CURRENCY_FX_AND_UNIT_FACTOR"
+        : sourceCurrency !== targetCurrency ? "CURRENCY_FX" : "UNIT_FACTOR",
+    conversionRate: Number((pricePerBase / numericPrice).toFixed(8)),
+    conversionBasis: conversionDetails.length === 0
+      ? `Quoted directly in ${targetCurrency} per ${targetUnit}`
+      : conversionDetails.join("; "),
   };
 }

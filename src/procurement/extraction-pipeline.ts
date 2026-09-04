@@ -66,6 +66,9 @@ export type QuoteProcessingResult = {
     normalizedPrice: number | null;
     normalizedUnit: string | null;
     normalizedCurrency: string | null;
+    conversionMethod: string | null;
+    conversionRate: number | null;
+    conversionBasis: string | null;
     moq: number | null;
     moqUnit: string | null;
     validationStatus: "VALID" | "AMBIGUOUS" | "MISSING" | "FAILED";
@@ -285,6 +288,9 @@ export async function processExtractedQuotes(input: {
     let normalizedPrice: number | null = null;
     let normalizedUnit: string | null = null;
     let normalizedCurrency: string | null = null;
+    let conversionMethod: string | null = null;
+    let conversionRate: number | null = null;
+    let conversionBasis: string | null = null;
     let validationStatus: "VALID" | "AMBIGUOUS" | "MISSING" | "FAILED" = "MISSING";
     let failureReason: string | null = null;
 
@@ -294,19 +300,32 @@ export async function processExtractedQuotes(input: {
       // per-base quantity (e.g. per piece, per kg).
       const unitInfo = parseUnitFactor(extracted.unit);
       const adjustedUnit = unitInfo ? unitInfo.baseUnit : (extracted.unit ?? "pcs");
-      const adjustedPrice = unitInfo && unitInfo.factor > 1
-        ? Number(extracted.price) / unitInfo.factor
-        : Number(extracted.price);
 
+      const requestedUnitInfo = parseUnitFactor(lineItem.unit);
+      const targetUnit = requestedUnitInfo?.baseUnit ?? (lineItem.unit?.trim().toLowerCase() || "pcs");
+      const targetCurrency = rfxCurrency?.toUpperCase() || "INR";
       const normalized: any = normalizeExtractedQuote({
-        price: adjustedPrice,
+        price: extracted.price ?? null,
         unit: adjustedUnit,
         currency: extracted.currency || "INR",
+        targetUnit,
+        targetCurrency,
+        unitFactor: unitInfo?.factor,
       });
       normalizedPrice = (normalized.normalizedPrice ?? null) as number | null;
       normalizedUnit = (normalized.normalizedUnit ?? null) as string | null;
       normalizedCurrency = (normalized.normalizedCurrency ?? null) as string | null;
-      validationStatus = "VALID";
+      conversionMethod = (normalized.conversionMethod ?? null) as string | null;
+      conversionRate = (normalized.conversionRate ?? null) as number | null;
+      conversionBasis = (normalized.conversionBasis ?? null) as string | null;
+      validationStatus = normalized.status === "valid" ? "VALID" : "AMBIGUOUS";
+      if (normalized.status !== "valid") {
+        issues.push({
+          issueType: "UNIT_CONVERSION_MISSING_BASIS",
+          severity: "WARNING",
+          message: `${mapped.sku}: ${normalized.reason ?? "Unable to normalize quote to the RFx comparison basis"}`,
+        });
+      }
     } else if (priceValidation.status === "ambiguous") {
       validationStatus = "AMBIGUOUS";
       issues.push({
@@ -414,6 +433,9 @@ export async function processExtractedQuotes(input: {
       normalizedPrice,
       normalizedUnit,
       normalizedCurrency,
+      conversionMethod,
+      conversionRate,
+      conversionBasis,
       moq: moqValidation.normalizedMoq,
       moqUnit: moqValidation.normalizedMoqUnit,
       validationStatus,
@@ -491,6 +513,9 @@ export async function saveProcessedQuotes(
     normalized_price: q.normalizedPrice,
     normalized_unit: q.normalizedUnit,
     normalized_currency: q.normalizedCurrency,
+    conversion_method: q.conversionMethod,
+    conversion_rate: q.conversionRate,
+    conversion_basis: q.conversionBasis,
     moq: q.moq,
     moq_unit: q.moqUnit,
     mapping_status: q.mappingConfidence > 0.8 ? "MAPPED" : "UNMAPPED",
