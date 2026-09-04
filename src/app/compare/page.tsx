@@ -35,6 +35,7 @@ interface PriceCell {
   sourceDocumentId: string | null;
   sourceReference: string | null;
   conditions: string | null;
+  failureReason: string | null;
   status: string;
 }
 
@@ -166,7 +167,8 @@ export default function ComparePage() {
         const { data: quotes } = await supabase
           .from("vendor_quotes")
           .select("*")
-          .eq("rfx_id", rfxId);
+          .eq("rfx_id", rfxId)
+          .order("created_at", { ascending: false });
         const { data: documents } = await supabase
           .from("vendor_documents")
           .select("id, filename, file_type, storage_path")
@@ -183,6 +185,7 @@ export default function ComparePage() {
           if (!matrix[q.line_item_id]) {
             matrix[q.line_item_id] = {};
           }
+          if (matrix[q.line_item_id][q.vendor_id]) return;
           matrix[q.line_item_id][q.vendor_id] = {
             quoteId: q.id,
             price: q.normalized_price,
@@ -197,16 +200,18 @@ export default function ComparePage() {
             sourceDocumentId: q.source_document_id,
             sourceReference: q.source_reference,
             conditions: q.conditions,
+            failureReason: q.failure_reason,
             status: q.validation_status || "UNKNOWN",
           };
         });
 
         setPriceMatrix(matrix);
         recordActivity("Compare", "Data refresh completed", `${quotes?.length ?? 0} extracted quotes loaded`, "success");
-      } catch (err: any) {
-        recordActivity("Compare", "Data refresh failed", err.message || "Failed to load comparison data", "error");
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Failed to load comparison data";
+        recordActivity("Compare", "Data refresh failed", message, "error");
         console.error("Error loading comparison data:", err);
-        setError(err.message || "Failed to load comparison data");
+        setError(message);
       } finally {
         setLoading(false);
       }
@@ -328,7 +333,7 @@ export default function ComparePage() {
                     <tr key={sku.id} className="border-t border-slate-200">
                       <td className="px-4 py-3 font-medium text-slate-900">{sku.sku}</td>
                       <td className="px-4 py-3 text-slate-600 text-xs">{sku.description}</td>
-                      {vendors.map((vendor) => {
+                      {visibleVendors.map((vendor) => {
                         const cell = priceMatrix[sku.id]?.[vendor.id];
                         return (
                           <td
@@ -397,6 +402,7 @@ export default function ComparePage() {
                 <div><dt className="text-slate-500">Validation</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.status}</dd></div>
                 <div><dt className="text-slate-500">Mapping confidence</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.confidence === null ? "Not recorded" : `${Math.round(selectedEvidence.confidence * 100)}%`}</dd></div>
                 <div><dt className="text-slate-500">Normalization</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.conversionMethod ?? "No conversion method recorded"}{selectedEvidence.conversionRate === null ? "" : ` (${selectedEvidence.conversionRate})`}</dd></div>
+                {selectedEvidence.failureReason ? <div><dt className="text-slate-500">Why review is needed</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.failureReason}</dd></div> : null}
                 <div><dt className="text-slate-500">Source document</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.document?.filename ?? "Not linked"}</dd></div>
                 <div><dt className="text-slate-500">Source reference</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.sourceReference ?? "Not recorded"}</dd></div>
                 {selectedEvidence.conditions ? <div><dt className="text-slate-500">Conditions</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.conditions}</dd></div> : null}
