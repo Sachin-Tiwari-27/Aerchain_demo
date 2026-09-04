@@ -55,9 +55,13 @@ export async function POST(req: NextRequest) {
     if (!resolvedToolName && typeof question === "string" && question.trim()) {
       const interpretation = await generateStructured({
         schema: z.object({
-          toolName: z.string().optional().default(""),
+          toolName: z.string().optional(),
+          tool: z.string().optional(),
           reply: z.string().optional().default(""),
-        }),
+        }).transform((value) => ({
+          toolName: value.toolName || value.tool || "",
+          reply: value.reply,
+        })),
         prompt: `Select exactly one deterministic procurement tool for this buyer question. Never calculate or invent numbers. Use recommend_award for whether to recommend an award, run_award_scenario for split/cheapest/award questions, calculate_savings for spend/savings, get_vendor_qualification for vendor clearance, get_risk_summary for risks, get_source_evidence for values that need verification or provenance, and get_comparison for price comparisons. Question: ${question}`,
         useCase: "analyst-intent",
         documentKind: "text-derived",
@@ -119,6 +123,24 @@ export async function POST(req: NextRequest) {
           risks: scenarioData.excludedSkus?.map((item) => `${item.sku}: ${item.reason}`) ?? [],
         };
         let recommendationData = fallbackRecommendation;
+
+      const completedResult = result as unknown as { success?: boolean; data?: unknown };
+      if (typeof question === "string" && question.trim() && completedResult.success) {
+        try {
+          const response = await generateStructured({
+            schema: z.object({ reply: z.string().min(1) }),
+            prompt: `Answer the buyer's question using only the deterministic tool result below. Explain the result clearly and concisely, mention important exceptions or missing data, and do not invent, recalculate, or change any numbers. The structured result card is also shown to the buyer, so focus on the conclusion and the reasons behind it. Buyer question: ${question}\n\nTool used: ${resolvedToolName}\n\nTool result JSON: ${JSON.stringify(completedResult.data)}`,
+            useCase: "analyst-recommendation",
+            documentKind: "text-derived",
+          });
+          aiReply = response.data.reply;
+          provenance = response.provenance;
+          model = response.model;
+        } catch {
+          // The deterministic tool result remains usable if the narrative call fails.
+          aiReply = aiReply || `I ran ${resolvedToolName.replace(/_/g, " ")}. Review the structured result below.`;
+        }
+      }
         let recommendationProvenance = null;
         let recommendationModel = null;
         try {

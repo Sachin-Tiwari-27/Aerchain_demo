@@ -111,7 +111,7 @@ export async function getVendorQualification(
   try {
     const { data: responses } = await supabase
       .from("vendor_responses")
-      .select("vendor_id, status")
+      .select("vendor_id, status, qualification_reasons")
       .eq("rfx_id", rfxId);
 
     const { data: vendors } = await supabase.from("vendors").select("id, name");
@@ -122,6 +122,7 @@ export async function getVendorQualification(
         vendorId: r.vendor_id,
         vendorName: vendor?.name || "Unknown",
         qualificationStatus: r.status || "UNKNOWN",
+        reasons: r.qualification_reasons || [],
       };
     });
 

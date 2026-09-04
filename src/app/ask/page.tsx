@@ -323,6 +323,8 @@ export default function AskPage() {
                 className={`flex items-center justify-between rounded-lg border-l-4 p-3 ${
                   v.qualificationStatus === "QUALIFIED"
                     ? "border-l-emerald-500 bg-emerald-50"
+                    : v.qualificationStatus === "QUALIFIED_WITH_EXCEPTIONS"
+                      ? "border-l-sky-500 bg-sky-50"
                     : v.qualificationStatus === "REVIEW"
                       ? "border-l-amber-500 bg-amber-50"
                       : "border-l-rose-500 bg-rose-50"
@@ -333,6 +335,8 @@ export default function AskPage() {
                   className={`rounded px-2 py-1 text-xs font-semibold ${
                     v.qualificationStatus === "QUALIFIED"
                       ? "bg-emerald-200 text-emerald-900"
+                      : v.qualificationStatus === "QUALIFIED_WITH_EXCEPTIONS"
+                        ? "bg-sky-200 text-sky-900"
                       : v.qualificationStatus === "REVIEW"
                         ? "bg-amber-200 text-amber-900"
                         : "bg-rose-200 text-rose-900"
@@ -340,6 +344,11 @@ export default function AskPage() {
                 >
                   {v.qualificationStatus}
                 </span>
+                {v.reasons?.length > 0 && (
+                  <ul className="mt-2 basis-full list-disc pl-5 text-xs text-slate-600">
+                    {v.reasons.map((reason: string) => <li key={reason}>{reason}</li>)}
+                  </ul>
+                )}
               </div>
             ))}
           </div>

@@ -77,6 +77,7 @@ export type QuoteProcessingResult = {
     failureReason: string | null;
   }>;
   qualificationStatus: "QUALIFIED" | "QUALIFIED_WITH_EXCEPTIONS" | "REVIEW" | "FAILED";
+  qualificationReasons: string[];
   issues: Array<{
     issueType: string;
     severity: "WARNING" | "ERROR";
@@ -288,7 +289,8 @@ export async function processExtractedQuotes(input: {
       currency: (extracted.currency ?? undefined) as string | undefined,
       unit: (extracted.unit ?? undefined) as string | undefined,
       quantity: safeQuantity,
-      leadTimeDays: extraction.lead_time_days ?? 0,
+      // Lead time is a buyer-facing exception, not a quote-level blocker.
+      leadTimeDays: 0,
       mandatorySpecPass: specificationValidation.status !== "failed",
     });
 
@@ -524,12 +526,10 @@ export async function processExtractedQuotes(input: {
     });
   }
   if ((extraction.lead_time_days ?? 0) > 14) {
-    qualificationStatus = "FAILED";
-    issues.push({ issueType: "LEAD_TIME", severity: "ERROR", message: `Lead time ${extraction.lead_time_days} days exceeds the 14-day RFx limit` });
+    issues.push({ issueType: "LEAD_TIME", severity: "WARNING", message: `Lead time ${extraction.lead_time_days} days exceeds the 14-day RFx limit` });
   }
 
   if (extraction.lead_time_days === null || extraction.lead_time_days === undefined) {
-    qualificationStatus = "REVIEW";
     issues.push({
       issueType: "LEAD_TIME_NOT_STATED",
       severity: "WARNING",
@@ -537,25 +537,21 @@ export async function processExtractedQuotes(input: {
     });
   }
 
-  if (failedCount > 0) {
-    // Eligibility is line-specific: retain a vendor's valid lines when another
-    // line fails a mandatory specification.
-    qualificationStatus = processedQuotes.some((quote) => quote.validationStatus === "VALID")
-      ? "QUALIFIED_WITH_EXCEPTIONS"
-      : "FAILED";
-  } else if (ambiguousCount > 0 || missingCount > 0 || unmappedExtractions.length > 0) {
-    if (failedCount === 0 && missingCount < lineItems.length * 0.3) {
-      // Some ambiguity/missing but not critical
-      qualificationStatus = "QUALIFIED_WITH_EXCEPTIONS";
-    } else {
-      qualificationStatus = "REVIEW";
-    }
-  }
+  const usableQuoteCount = processedQuotes.filter((quote) => quote.validationStatus === "VALID").length;
+  const hasExceptions =
+    failedCount > 0 ||
+    ambiguousCount > 0 ||
+    missingCount > 0 ||
+    unmappedExtractions.length > 0 ||
+    issues.length > 0;
 
-  // Lead time is a response-wide policy, unlike per-line specifications.
-  if ((extraction.lead_time_days ?? 0) > 14) {
+  if (usableQuoteCount > 0) {
+    // A vendor with at least one usable price remains eligible. Missing SKUs,
+    // mapping issues, and lead-time concerns are buyer-facing exceptions.
+    qualificationStatus = hasExceptions ? "QUALIFIED_WITH_EXCEPTIONS" : "QUALIFIED";
+  } else if (failedCount > 0) {
     qualificationStatus = "FAILED";
-  } else if (extraction.lead_time_days === null || extraction.lead_time_days === undefined) {
+  } else {
     qualificationStatus = "REVIEW";
   }
 
@@ -566,6 +562,7 @@ export async function processExtractedQuotes(input: {
     rfxId,
     processedQuotes,
     qualificationStatus,
+    qualificationReasons: issues.map((issue) => issue.message),
     issues,
   };
 }
@@ -622,7 +619,10 @@ export async function saveProcessedQuotes(
   if (supabase) {
     await supabase
       .from("vendor_responses")
-      .update({ status: result.qualificationStatus })
+      .update({
+        status: result.qualificationStatus,
+        qualification_reasons: result.qualificationReasons,
+      })
       .eq("id", result.vendorResponseId);
   }
 }

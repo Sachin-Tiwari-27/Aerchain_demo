@@ -422,7 +422,7 @@ test("handles complete, partial, vague, mixed-unit, and late vendor response fix
   assert.equal(mixedUnits.processedQuotes.find((quote) => quote.sku === "CP-001")?.validationStatus, "AMBIGUOUS");
   assert.equal(mixedUnits.processedQuotes.find((quote) => quote.sku === "CP-003")?.normalizedPrice, 18.5);
   assert.equal(mixedUnits.issues.some((issue) => issue.issueType === "SKU_MAPPING_AMBIGUOUS"), true);
-  assert.equal(mixedUnits.qualificationStatus, "REVIEW");
+  assert.equal(mixedUnits.qualificationStatus, "QUALIFIED_WITH_EXCEPTIONS");
 
   const narrativeRange = await processExtractedQuotes({ ...base, extraction: {
     vendor: "C", lead_time_days: null, ...emptyAnswers,
@@ -436,6 +436,6 @@ test("handles complete, partial, vague, mixed-unit, and late vendor response fix
     vendor: "E", lead_time_days: 30, ...emptyAnswers,
     quotes: [{ sku_reference: "CP-001", price: 11.8, unit: "pc", currency: "INR", ply: 3, conditions: null, confidence: null }],
   } });
-  assert.equal(lateRateCard.qualificationStatus, "FAILED");
+  assert.equal(lateRateCard.qualificationStatus, "QUALIFIED_WITH_EXCEPTIONS");
   assert.equal(lateRateCard.issues.some((issue) => issue.issueType === "LEAD_TIME"), true);
 });

@@ -302,11 +302,6 @@ async function callGemini(prompt: string, model: string, documentKind: DocumentK
   const chunks = payload?.candidates?.[0]?.content?.parts ?? [];
   const text = chunks.map((part: { text?: string }) => part.text ?? "").join("\n");
   
-  // Debug: log raw response for extraction issues
-  if (text && text.length < 1000) {
-    console.error(`[Gemini ${model}] Raw response:`, text);
-  }
-  
   return parseJsonPayload(text);
 }
 

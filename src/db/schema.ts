@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS vendor_responses (
   vendor_id UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
   document_id UUID REFERENCES vendor_documents(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'UPLOADED',
+  qualification_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
   raw_extraction JSONB,
   extraction_confidence NUMERIC,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
