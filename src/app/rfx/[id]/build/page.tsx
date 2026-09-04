@@ -1,8 +1,9 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { recordActivity } from "@/lib/activity-log";
+import { ApproveTimeline, type ApproveTimelineVendor } from "@/components/rfx/approve-timeline";
 
 type LineItem = {
   id: string;
@@ -41,6 +42,9 @@ export default function BuildPage() {
   const [feed, setFeed] = useState<FeedEvent[]>([
     { time: now(), label: "Workspace ready", detail: "Copilot is connected and waiting for your sourcing brief.", tone: "green" },
   ]);
+  const [approving, setApproving] = useState(false);
+  const [vendorsForInvite, setVendorsForInvite] = useState<ApproveTimelineVendor[]>([]);
+  const router = useRouter();
 
   useEffect(() => {
     const load = async () => {
@@ -210,8 +214,45 @@ export default function BuildPage() {
   };
 
   const approve = async () => {
-    const response = await runAction("approve_rfx");
-    if (response) setFeed((current) => [{ time: now(), label: "RFx approved", detail: "Supplier invitation is ready to simulate.", tone: "green" }, ...current]);
+    if (!rfxId) return;
+
+    // Fetch vendors for the invite timeline. Falls back to the seed set if
+    // the table is empty so the timeline always has something to show.
+    let vendors: ApproveTimelineVendor[] = [];
+    try {
+      const res = await fetch(`/api/vendors?rfxId=${rfxId}`);
+      if (res.ok) {
+        const payload = await res.json();
+        if (Array.isArray(payload?.vendors)) {
+          vendors = payload.vendors;
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load vendors for invite timeline", err);
+    }
+
+    if (vendors.length === 0) {
+      vendors = [
+        { id: "karnavati", name: "Karnavati Packaging", contact_name: "Aisha Mehta", contact_email: "aisha@karnavatipackaging.in" },
+        { id: "apex", name: "Apex Corrugates", contact_name: "Rohit Nair", contact_email: "rohit@apexcorrugates.in" },
+        { id: "maharashtra", name: "Maharashtra BoxWorks", contact_name: "Neha Shah", contact_email: "neha@maharashtraboxworks.in" },
+        { id: "bharat", name: "Bharat Carton Group", contact_name: "Vikram Iyer", contact_email: "vikram@bharatcarton.in" },
+        { id: "punjab", name: "Punjab Fibre Solutions", contact_name: "Simran Kaur", contact_email: "simran@punjabfibre.in" },
+      ];
+    }
+
+    setVendorsForInvite(vendors);
+    setApproving(true);
+    setFeed((current) => [{ time: now(), label: "RFx approved", detail: `Sending invitations to ${vendors.length} suppliers.`, tone: "green" }, ...current]);
+    recordActivity("Build RFx", "RFx approved", `Sending invitations to ${vendors.length} suppliers`, "success");
+
+    // Fire the API in the background so the UI doesn't block on it.
+    void runAction("approve_rfx");
+  };
+
+  const completeApprove = () => {
+    if (rfxId) window.sessionStorage.setItem("aerchain:just-approved", rfxId);
+    router.push("/responses");
   };
 
   const rfx = state?.rfx;
@@ -229,7 +270,11 @@ export default function BuildPage() {
       </header>
 
 
-      <main className="grid gap-6 xl:h-[calc(100vh-16rem)] xl:min-h-135 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+      <main className={approving ? "block" : "grid gap-6 xl:h-[calc(100vh-16rem)] xl:min-h-135 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]"}>
+        {approving ? (
+          <ApproveTimeline vendors={vendorsForInvite} onComplete={completeApprove} />
+        ) : null}
+        {!approving && (<>
         <section className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-700">Copilot</p><h2 className="mt-1 text-lg font-semibold text-slate-950">Build the brief</h2></div><span className="flex items-center gap-2 text-xs font-semibold text-emerald-700"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Live</span></div>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-50/70 p-5">{messages.map((item, index) => <div key={`${item.role}-${index}`} className={`flex ${item.role === "buyer" ? "justify-end" : "justify-start"}`}><div className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6 ${item.role === "buyer" ? "rounded-br-sm bg-sky-600 text-white" : item.role === "notice" ? "border border-amber-200 bg-amber-50 text-amber-900" : "rounded-bl-sm border border-slate-200 bg-white text-slate-700 shadow-sm"}`}>{item.role !== "buyer" && <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">{item.role === "notice" ? "Review point" : "RFx copilot"}</p>}{item.text}</div></div>)}{loading && <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><span className="h-2 w-2 animate-pulse rounded-full bg-sky-500" /> Matching against the catalog...</div>}</div>
@@ -268,6 +313,7 @@ export default function BuildPage() {
             <div><div className="rounded-xl border border-slate-200 p-4"><div className="flex justify-between"><h3 className="font-semibold text-slate-950">Fixed questionnaire</h3><span className="text-xs text-slate-500">{state?.questionnaire?.length ?? 0}</span></div><div className="mt-3 space-y-2">{(state?.questionnaire ?? []).map((question, index) => <div key={question.id} className="border-t border-slate-100 pt-2 text-xs leading-5 text-slate-600"><span className="mr-1 font-semibold text-slate-400">{index + 1}.</span>{question.question}</div>)}</div></div></div>
           </div>
         </section>
+        </>)}
       </main>
 
 

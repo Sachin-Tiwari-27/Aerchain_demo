@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { RfxContextBar } from "@/components/layout/rfx-context-bar";
+import { BulkUploader, type UploadedDocument } from "@/components/responses/bulk-uploader";
 import { recordActivity } from "@/lib/activity-log";
 
 interface VendorDocument {
@@ -42,9 +43,18 @@ export default function ResponsesPage() {
   const [rfxId, setRfxId] = useState<string>("");
   const [rfxName, setRfxName] = useState("Selected RFx");
   const [extracting, setExtracting] = useState<Record<string, boolean>>({});
-  const [selectedVendorId, setSelectedVendorId] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [deleting, setDeleting] = useState<Record<string, boolean>>({});
+  const [approvedNotice, setApprovedNotice] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : window.sessionStorage.getItem("aerchain:just-approved"),
+  );
+
+  useEffect(() => {
+    const flag = window.sessionStorage.getItem("aerchain:just-approved");
+    if (!flag) return;
+    window.sessionStorage.removeItem("aerchain:just-approved");
+    const timer = window.setTimeout(() => setApprovedNotice(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -172,30 +182,6 @@ export default function ResponsesPage() {
     }
   };
 
-  const handleUpload = async () => {
-    if (!selectedFile || !selectedVendorId || !rfxId) return;
-    setUploading(true);
-    setError("");
-    recordActivity("Responses", "Upload requested", selectedFile.name, "running");
-    try {
-      const formData = new FormData();
-      formData.append("rfxId", rfxId);
-      formData.append("vendorId", selectedVendorId);
-      formData.append("file", selectedFile);
-      const response = await fetch("/api/responses/upload", { method: "POST", body: formData });
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error || "Upload failed");
-      recordActivity("Responses", "Upload completed", selectedFile.name, "success");
-      setDocuments((current) => [...current, result.document]);
-      setSelectedFile(null);
-    } catch (err) {
-      recordActivity("Responses", "Upload failed", err instanceof Error ? err.message : "Upload failed", "error");
-      setError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const viewOriginal = async (documentId: string, storagePath: string | null) => {
     if (!storagePath) return;
     recordActivity("Responses", "Original document requested", storagePath, "running");
@@ -208,6 +194,29 @@ export default function ResponsesPage() {
     }
     window.open(result.signedUrl, "_blank", "noopener,noreferrer");
     recordActivity("Responses", "Original document opened", "Signed URL created", "success");
+  };
+
+  const handleDelete = async (documentId: string) => {
+    const doc = documents.find((document) => document.id === documentId);
+    if (!doc || !window.confirm(`Delete ${doc.filename} and its extracted response?`)) return;
+
+    setDeleting((prev) => ({ ...prev, [documentId]: true }));
+    recordActivity("Responses", "Response deletion requested", doc.filename, "running");
+
+    try {
+      const response = await fetch(`/api/responses/upload?documentId=${encodeURIComponent(documentId)}`, { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || "Could not delete response");
+
+      setDocuments((prev) => prev.filter((document) => document.id !== documentId));
+      recordActivity("Responses", "Response deleted", doc.filename, "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not delete response";
+      recordActivity("Responses", "Response deletion failed", message, "error");
+      setError(message);
+    } finally {
+      setDeleting((prev) => ({ ...prev, [documentId]: false }));
+    }
   };
 
   if (loading) {
@@ -255,19 +264,18 @@ export default function ResponsesPage() {
     <div className="space-y-6">
       <RfxContextBar stage="Upload" />
 
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-1"><h3 className="text-lg font-semibold">Add supplier response</h3><p className="text-sm text-slate-500">Supported: PDF, image, Word, Excel, CSV, JSON, Markdown, and text.</p></div>
-        <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_1.3fr_auto]">
-          <label className="text-sm font-medium text-slate-700"><span className="mb-2 block text-xs uppercase tracking-[0.12em] text-slate-500">1. Supplier</span><select value={selectedVendorId} onChange={(event) => setSelectedVendorId(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm">
-            <option value="">Select vendor</option>
-            {Object.values(vendors).map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
-          </select></label>
-          <label className="text-sm font-medium text-slate-700"><span className="mb-2 block text-xs uppercase tracking-[0.12em] text-slate-500">2. Original document</span><input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.txt,.csv,.json,.md,.docx,.xlsx,.xls,.xlsm" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} className="block w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2.5 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-sky-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-sky-800" /></label>
-          <button onClick={() => void handleUpload()} disabled={uploading || !selectedFile || !selectedVendorId} className="self-end rounded-xl bg-sky-600 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-700 disabled:bg-slate-300">{uploading ? "Uploading..." : "Upload response"}</button>
+      {approvedNotice && (
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <p><span className="mr-2 font-bold">✓</span>RFx sent to suppliers. Their responses can be collected here.</p>
+          <button type="button" onClick={() => setApprovedNotice(null)} className="text-xs font-semibold text-emerald-700 hover:text-emerald-900">Dismiss</button>
         </div>
-        {selectedFile && <p className="mt-3 rounded-lg bg-sky-50 px-3 py-2 text-xs font-medium text-sky-800">Ready: {selectedFile.name} · {(selectedFile.size / 1024).toFixed(0)} KB</p>}
-      </section>
+      )}
+
+      <BulkUploader
+        rfxId={rfxId}
+        vendors={Object.values(vendors)}
+        onUploaded={(newDocuments: UploadedDocument[]) => setDocuments((current) => [...current, ...newDocuments])}
+      />
 
       {documents.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
@@ -283,7 +291,7 @@ export default function ResponsesPage() {
                   <th className="px-6 py-3 text-left font-semibold text-slate-900">Filename</th>
                   <th className="px-6 py-3 text-left font-semibold text-slate-900">Type</th>
                   <th className="px-6 py-3 text-left font-semibold text-slate-900">Status</th>
-                  <th className="px-6 py-3 text-left font-semibold text-slate-900">Archetype</th>
+                  <th className="px-6 py-3 text-center font-semibold text-slate-900">View original</th>
                   <th className="px-6 py-3 text-center font-semibold text-slate-900">Action</th>
                 </tr>
               </thead>
@@ -300,11 +308,21 @@ export default function ResponsesPage() {
                         {doc.processing_status}
                       </span>
                     </td>
-                    <td className="px-6 py-3 text-xs text-slate-600">
-                      {typeof doc.metadata?.archetype === "string" ? doc.metadata.archetype : "—"}
-                    </td>
                     <td className="px-6 py-3 text-center">
-                      {doc.storage_path && <button onClick={() => void viewOriginal(doc.id, doc.storage_path ?? null)} className="mr-2 text-xs font-semibold text-sky-700 hover:text-sky-900">View original</button>}
+                      {doc.storage_path ? (
+                        <button
+                          type="button"
+                          onClick={() => void viewOriginal(doc.id, doc.storage_path ?? null)}
+                          className="text-xs font-semibold text-sky-700 hover:text-sky-900"
+                        >
+                          View original
+                        </button>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-3">
+                      <div className="flex items-center justify-center gap-2 whitespace-nowrap">
                       {doc.processing_status === "UPLOADED" && (
                         <button
                           onClick={() => handleExtract(doc.id)}
@@ -325,6 +343,15 @@ export default function ResponsesPage() {
                           Retry
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => void handleDelete(doc.id)}
+                        disabled={deleting[doc.id] || extracting[doc.id]}
+                        className="ml-2 inline-flex items-center justify-center rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:bg-slate-300"
+                      >
+                        {deleting[doc.id] ? "Deleting..." : "Delete"}
+                      </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

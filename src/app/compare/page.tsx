@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { RfxContextBar } from "@/components/layout/rfx-context-bar";
+import { Drawer } from "@/components/ui/drawer";
+import { InfoButton } from "@/components/ui/info-button";
+import { compareInfoContent, type CompareInfoKey } from "@/app/compare/info-drawer";
 import { recordActivity } from "@/lib/activity-log";
 
 interface Vendor {
@@ -90,6 +93,7 @@ export default function ComparePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceQuote | null>(null);
+  const [infoKey, setInfoKey] = useState<CompareInfoKey | null>(null);
   const [rfxName, setRfxName] = useState("Selected RFx");
   const [qualifiedOnly, setQualifiedOnly] = useState(false);
   const [comparableOnly, setComparableOnly] = useState(false);
@@ -268,6 +272,7 @@ export default function ComparePage() {
         <label className="flex items-center gap-1.5"><input type="checkbox" className="rounded border-slate-300 text-sky-600 focus:ring-sky-500" checked={includeReview} onChange={(event) => setIncludeReview(event.target.checked)} /> Include review</label>
         <label className="flex items-center gap-1.5"><input type="checkbox" className="rounded border-slate-300 text-sky-600 focus:ring-sky-500" checked={showFailed} onChange={(event) => setShowFailed(event.target.checked)} /> Show failed</label>
         <label className="flex items-center gap-1.5"><input type="checkbox" className="rounded border-slate-300 text-sky-600 focus:ring-sky-500" checked={showConfidence} onChange={(event) => setShowConfidence(event.target.checked)} /> Confidence scores</label>
+        <InfoButton label="Explain comparison filters" onClick={() => setInfoKey("filters")} />
         
         <div className="ml-auto flex items-center gap-2 text-sky-700">
           <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-100 font-bold">ⓘ</span>
@@ -296,7 +301,7 @@ export default function ComparePage() {
                   </span>
                 </div>
                 <p className="mt-3 text-2xl font-semibold">{vendor.share}</p>
-                <p className="mt-1 text-xs text-slate-500">share cap</p>
+                <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">share cap <InfoButton label="Explain supplier share cap" onClick={() => setInfoKey("share-cap")} /></p>
               </div>
             ))}
           </section>
@@ -347,8 +352,9 @@ export default function ComparePage() {
                                 title="View quote evidence"
                               >
                                 <span className="font-semibold">{formatPrice(cell.price)}</span>
-                                <span className="text-xs text-slate-500">
-                                  {cell.status === "VALID" ? "✓" : cell.status === "MISSING" ? "✗" : "?"}
+                                <span className="flex items-center gap-1 text-xs text-slate-500">
+                                  <span>{cell.status}</span>
+                                  <InfoButton label="Explain quote validation status" onClick={() => setInfoKey("validation-status")} />
                                 </span>
                                 {showConfidence && <span className="text-[10px] text-slate-400">{cell.confidence === null ? "No confidence" : `${Math.round(cell.confidence * 100)}% confidence`}</span>}
                               </button>
@@ -367,27 +373,14 @@ export default function ComparePage() {
         </>
       )}
 
-      {selectedEvidence ? (
-        <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" role="presentation" onClick={() => setSelectedEvidence(null)}>
-          <aside
-            className="h-full w-full max-w-md overflow-y-auto bg-white p-6 shadow-2xl"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="evidence-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700">Evidence</p>
-                <h2 id="evidence-title" className="mt-2 text-xl font-semibold text-slate-900">Quote provenance</h2>
-                <p className="mt-1 text-sm text-slate-500">{selectedEvidence.vendorName} · {selectedEvidence.sku}</p>
-              </div>
-              <button type="button" onClick={() => setSelectedEvidence(null)} className="text-sm font-medium text-slate-500 hover:text-slate-900">
-                Close
-              </button>
-            </div>
-
-            <div className="mt-6 space-y-5">
+      <Drawer
+        open={Boolean(selectedEvidence)}
+        onClose={() => setSelectedEvidence(null)}
+        eyebrow="Evidence"
+        title="Quote provenance"
+        subtitle={selectedEvidence ? `${selectedEvidence.vendorName} · ${selectedEvidence.sku}` : undefined}
+      >
+        {selectedEvidence && <div className="space-y-5">
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Original value</p>
                 <p className="mt-2 text-lg font-semibold text-slate-900">
@@ -408,10 +401,20 @@ export default function ComparePage() {
                 <div><dt className="text-slate-500">Source reference</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.sourceReference ?? "Not recorded"}</dd></div>
                 {selectedEvidence.conditions ? <div><dt className="text-slate-500">Conditions</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.conditions}</dd></div> : null}
               </dl>
-            </div>
-          </aside>
-        </div>
-      ) : null}
+        </div>}
+      </Drawer>
+
+      {infoKey && (
+        <Drawer
+          open
+          onClose={() => setInfoKey(null)}
+          eyebrow={compareInfoContent[infoKey].eyebrow}
+          title={compareInfoContent[infoKey].title}
+          subtitle={compareInfoContent[infoKey].subtitle}
+        >
+          {compareInfoContent[infoKey].body}
+        </Drawer>
+      )}
     </div>
   );
 }

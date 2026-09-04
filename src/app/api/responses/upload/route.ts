@@ -49,49 +49,190 @@ export async function GET(request: NextRequest) {
   }
 }
 
+export async function DELETE(request: NextRequest) {
+  try {
+    const documentId = request.nextUrl.searchParams.get("documentId");
+    if (!documentId) {
+      return NextResponse.json({ success: false, error: "Document ID is required" }, { status: 400 });
+    }
+
+    const adminClient = getAdminClient();
+    const { data: document, error: documentLookupError } = await adminClient
+      .from("vendor_documents")
+      .select("id, storage_path")
+      .eq("id", documentId)
+      .maybeSingle();
+
+    if (documentLookupError) throw new Error(documentLookupError.message);
+    if (!document) {
+      return NextResponse.json({ success: false, error: "Document record not found" }, { status: 404 });
+    }
+
+    const { data: responses, error: responsesLookupError } = await adminClient
+      .from("vendor_responses")
+      .select("id")
+      .eq("document_id", documentId);
+    if (responsesLookupError) throw new Error(responsesLookupError.message);
+
+    const responseIds = (responses ?? []).map((response) => response.id);
+    if (responseIds.length > 0) {
+      const { error: quotesByResponseError } = await adminClient
+        .from("vendor_quotes")
+        .delete()
+        .in("vendor_response_id", responseIds);
+      if (quotesByResponseError) throw new Error(quotesByResponseError.message);
+    }
+
+    const { error: quotesByDocumentError } = await adminClient
+      .from("vendor_quotes")
+      .delete()
+      .eq("source_document_id", documentId);
+    if (quotesByDocumentError) throw new Error(quotesByDocumentError.message);
+
+    const { error: responsesDeleteError } = await adminClient
+      .from("vendor_responses")
+      .delete()
+      .eq("document_id", documentId);
+    if (responsesDeleteError) throw new Error(responsesDeleteError.message);
+
+    const { error: documentDeleteError } = await adminClient
+      .from("vendor_documents")
+      .delete()
+      .eq("id", documentId);
+    if (documentDeleteError) throw new Error(documentDeleteError.message);
+
+    if (document.storage_path) {
+      const { error: storageError } = await adminClient.storage
+        .from("Vendor Response")
+        .remove([document.storage_path]);
+      if (storageError) console.warn("Could not remove original response file:", storageError.message);
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Delete failed" }, { status: 500 });
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const rfxId = String(formData.get("rfxId") ?? "");
-    const vendorId = String(formData.get("vendorId") ?? "");
-    const file = formData.get("file");
+    const files = formData.getAll("files");
+    const vendorIds = formData.getAll("vendorIds").map((value) => String(value));
 
-    if (!rfxId || !vendorId || !(file instanceof File)) {
-      return NextResponse.json({ success: false, error: "RFx, vendor, and file are required" }, { status: 400 });
+    // Backwards-compat: if only a single file + vendorId are posted (old UI),
+    // accept them too. The new BulkUploader always sends parallel arrays.
+    const legacyFile = formData.get("file");
+    const legacyVendor = String(formData.get("vendorId") ?? "");
+
+    let resolvedFiles: File[] = [];
+    let resolvedVendorIds: string[] = [];
+
+    if (files.length > 0 && files.every((f) => f instanceof File)) {
+      resolvedFiles = files as File[];
+      resolvedVendorIds = vendorIds;
+    } else if (legacyFile instanceof File && legacyVendor) {
+      resolvedFiles = [legacyFile];
+      resolvedVendorIds = [legacyVendor];
+    }
+
+    if (!rfxId || resolvedFiles.length === 0 || resolvedVendorIds.length !== resolvedFiles.length || resolvedVendorIds.some((v) => !v)) {
+      return NextResponse.json(
+        { success: false, error: "RFx, file(s), and a vendor per file are required" },
+        { status: 400 },
+      );
     }
 
     if (!supabase) throw new Error("Supabase client not configured");
     const adminClient = getAdminClient();
 
-    const prepared = await prepareDocument(file);
-    const storagePath = `${rfxId}/${vendorId}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-    const { error: storageError } = await adminClient.storage
-      .from("Vendor Response")
-      .upload(storagePath, file, { contentType: prepared.mediaType, upsert: false });
-    if (storageError) throw new Error(`Original document storage failed: ${storageError.message}`);
-    const { data, error } = await adminClient
-      .from("vendor_documents")
-      .insert({
-        rfx_id: rfxId,
-        vendor_id: vendorId,
-        filename: file.name,
-        file_type: prepared.mediaType,
-        storage_path: storagePath,
-        processing_status: "UPLOADED",
-        extracted_text: prepared.contentText || null,
-        metadata: {
-          uploadedVia: "responses-ui",
-          size: prepared.originalSize,
-          documentKind: prepared.documentKind,
-          mediaBase64: prepared.mediaBase64,
-        },
-      })
-      .select("*")
-      .single();
+    // Verify every vendorId exists in one query (cheap, indexed).
+    const uniqueVendors = Array.from(new Set(resolvedVendorIds));
+    const { data: vendorRows, error: vendorError } = await supabase
+      .from("vendors")
+      .select("id")
+      .in("id", uniqueVendors);
+    if (vendorError) throw new Error(vendorError.message);
+    const validVendorIds = new Set((vendorRows ?? []).map((row) => row.id));
+    for (const vendorId of uniqueVendors) {
+      if (!validVendorIds.has(vendorId)) {
+        throw new Error(`Unknown vendor '${vendorId}'`);
+      }
+    }
 
-    if (error) throw new Error(error.message);
-    return NextResponse.json({ success: true, document: data });
+    const isBulk = resolvedFiles.length > 1;
+    const results = await Promise.allSettled(
+      resolvedFiles.map((file, index) =>
+        uploadSingle({ file, vendorId: resolvedVendorIds[index], rfxId, adminClient, uploadedVia: isBulk ? "responses-ui-bulk" : "responses-ui" }),
+      ),
+    );
+
+    const payload = results.map((result, index) => {
+      const filename = resolvedFiles[index].name;
+      if (result.status === "fulfilled") {
+        return { filename, success: true, document: result.value };
+      }
+      return {
+        filename,
+        success: false,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      };
+    });
+
+    const anySuccess = payload.some((p) => p.success);
+    return NextResponse.json(
+      {
+        success: anySuccess,
+        results: payload,
+        message: anySuccess ? `${payload.filter((p) => p.success).length} of ${payload.length} uploaded` : "All uploads failed",
+      },
+      { status: anySuccess ? 200 : 500 },
+    );
   } catch (error) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Upload failed" }, { status: 500 });
   }
+}
+
+async function uploadSingle({
+  file,
+  vendorId,
+  rfxId,
+  adminClient,
+  uploadedVia,
+}: {
+  file: File;
+  vendorId: string;
+  rfxId: string;
+  adminClient: ReturnType<typeof getAdminClient>;
+  uploadedVia: string;
+}) {
+  const prepared = await prepareDocument(file);
+  const storagePath = `${rfxId}/${vendorId}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+  const { error: storageError } = await adminClient.storage
+    .from("Vendor Response")
+    .upload(storagePath, file, { contentType: prepared.mediaType, upsert: false });
+  if (storageError) throw new Error(`Original document storage failed: ${storageError.message}`);
+
+  const { data, error } = await adminClient
+    .from("vendor_documents")
+    .insert({
+      rfx_id: rfxId,
+      vendor_id: vendorId,
+      filename: file.name,
+      file_type: prepared.mediaType,
+      storage_path: storagePath,
+      processing_status: "UPLOADED",
+      extracted_text: prepared.contentText || null,
+      metadata: {
+        uploadedVia,
+        size: prepared.originalSize,
+        documentKind: prepared.documentKind,
+        mediaBase64: prepared.mediaBase64,
+      },
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
 }

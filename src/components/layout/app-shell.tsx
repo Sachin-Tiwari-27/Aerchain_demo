@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { activityLogEventName, clearActivityLog, readActivityLog, type ActivityEntry } from "@/lib/activity-log";
+import { Drawer } from "@/components/ui/drawer";
 
 const navItems = [
   { href: "/", label: "1. Choose RFx" },
@@ -60,7 +61,32 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
-      {logOpen && <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/30" role="presentation" onClick={() => setLogOpen(false)}><aside className="h-full w-full max-w-lg overflow-y-auto bg-slate-950 p-5 text-white shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="system-log-title" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">Observability</p><h2 id="system-log-title" className="mt-2 text-xl font-semibold">System activity log</h2><p className="mt-1 text-sm text-slate-400">AI requests, tool calls, uploads, extraction, and workflow events.</p></div><button type="button" onClick={() => setLogOpen(false)} className="text-sm text-slate-400 hover:text-white">Close</button></div><div className="mt-5 flex justify-end"><button type="button" onClick={clearActivityLog} className="text-xs font-semibold text-slate-400 hover:text-white">Clear log</button></div><div className="mt-3 space-y-2">{activityLog.length === 0 ? <p className="rounded-lg border border-slate-800 p-4 text-sm text-slate-400">No activity recorded yet.</p> : activityLog.map((entry) => <div key={entry.id} className="rounded-lg border border-slate-800 bg-slate-900 p-3"><div className="flex items-center justify-between gap-3"><span className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-300">{entry.area}</span><span className={`text-[10px] font-bold uppercase ${entry.status === "error" ? "text-rose-300" : entry.status === "success" ? "text-emerald-300" : "text-amber-300"}`}>{entry.status}</span></div><p className="mt-1 text-sm font-semibold text-slate-100">{entry.event}</p><p className="mt-1 wrap-break-word text-xs leading-5 text-slate-400">{entry.detail}</p><time className="mt-2 block text-[10px] text-slate-600">{entry.time}</time></div>)}</div></aside></div>}
+      <Drawer
+        open={logOpen}
+        onClose={() => setLogOpen(false)}
+        eyebrow="Observability"
+        title="System activity log"
+        subtitle="AI requests, tool calls, uploads, extraction, and workflow events."
+        tone="dark"
+        width="lg"
+      >
+        <div className="flex justify-end"><button type="button" onClick={clearActivityLog} className="text-xs font-semibold text-slate-400 hover:text-white">Clear log</button></div>
+        <div className="mt-3 space-y-2">
+          {activityLog.length === 0 ? (
+            <p className="rounded-lg border border-slate-800 p-4 text-sm text-slate-400">No activity recorded yet.</p>
+          ) : activityLog.map((entry) => (
+            <div key={entry.id} className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-300">{entry.area}</span>
+                <span className={`text-[10px] font-bold uppercase ${entry.status === "error" ? "text-rose-300" : entry.status === "success" ? "text-emerald-300" : "text-amber-300"}`}>{entry.status}</span>
+              </div>
+              <p className="mt-1 text-sm font-semibold text-slate-100">{entry.event}</p>
+              <p className="mt-1 wrap-break-word text-xs leading-5 text-slate-400">{entry.detail}</p>
+              <time className="mt-2 block text-[10px] text-slate-600">{entry.time}</time>
+            </div>
+          ))}
+        </div>
+      </Drawer>
     </div>
   );
 }
