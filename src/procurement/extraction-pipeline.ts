@@ -1,7 +1,10 @@
-import { z } from "zod";
 import type { VendorQuoteExtraction } from "@/ai/extraction";
 import { validateQuote, validateMoq } from "@/procurement/validation";
-import { normalizeExtractedQuote, parseUnitFactor } from "@/procurement/normalization";
+import {
+  getCurrencyConversionRate,
+  normalizeExtractedQuote,
+  parseUnitFactor,
+} from "@/procurement/normalization";
 
 /** Supported currency codes for normalization. */
 const KNOWN_CURRENCIES = new Set(["USD", "EUR", "GBP", "INR", "CAD", "JPY"]);
@@ -59,6 +62,8 @@ export type QuoteProcessingResult = {
     normalizedPrice: number | null;
     normalizedUnit: string | null;
     normalizedCurrency: string | null;
+    conversionMethod: string | null;
+    conversionRate: number | null;
     moq: number | null;
     moqUnit: string | null;
     validationStatus: "VALID" | "AMBIGUOUS" | "MISSING" | "FAILED";
@@ -212,7 +217,7 @@ export async function processExtractedQuotes(input: {
     // Guard: annual_quantity may be null/0; fall back to a safe positive minimum
     // so validateQuote never fails with "Quantity must be positive" on metadata gaps.
     const safeQuantity = Math.max(1, Number(lineItem.annual_quantity ?? 1));
-    const priceValidation: any = validateQuote({
+    const priceValidation = validateQuote({
       price: extracted.price ?? null,
       currency: (extracted.currency ?? undefined) as string | undefined,
       unit: (extracted.unit ?? undefined) as string | undefined,
@@ -225,7 +230,14 @@ export async function processExtractedQuotes(input: {
     let normalizedPrice: number | null = null;
     let normalizedUnit: string | null = null;
     let normalizedCurrency: string | null = null;
+    let conversionMethod: string | null = null;
+    let conversionRate: number | null = null;
     let validationStatus: "VALID" | "AMBIGUOUS" | "MISSING" | "FAILED" = "MISSING";
+    const rawCurrency = (extracted.currency ?? "").trim().toUpperCase();
+    const targetCurrency = (rfxCurrency ?? "").trim().toUpperCase();
+    const configuredConversionRate = rawCurrency && targetCurrency
+      ? getCurrencyConversionRate(rawCurrency, targetCurrency)
+      : null;
 
     if (priceValidation.status === "valid") {
       // Resolve compound units like "1000 units" or "per kg" into a
@@ -237,15 +249,44 @@ export async function processExtractedQuotes(input: {
         ? Number(extracted.price) / unitInfo.factor
         : Number(extracted.price);
 
-      const normalized: any = normalizeExtractedQuote({
-        price: adjustedPrice,
-        unit: adjustedUnit,
-        currency: extracted.currency || "INR",
-      });
-      normalizedPrice = (normalized.normalizedPrice ?? null) as number | null;
-      normalizedUnit = (normalized.normalizedUnit ?? null) as string | null;
-      normalizedCurrency = (normalized.normalizedCurrency ?? null) as string | null;
-      validationStatus = "VALID";
+      if (!rawCurrency || !KNOWN_CURRENCIES.has(rawCurrency)) {
+        validationStatus = "AMBIGUOUS";
+        issues.push({
+          issueType: "CURRENCY_CONVERSION_UNAVAILABLE",
+          severity: "ERROR",
+          message: `${mapped.sku}: Cannot normalize quote because its currency is ${rawCurrency ? `unsupported (${rawCurrency})` : "unknown"}. Raw price was retained and the quote requires review.`,
+        });
+      } else if (!targetCurrency || !KNOWN_CURRENCIES.has(targetCurrency) || configuredConversionRate === null) {
+        validationStatus = "AMBIGUOUS";
+        issues.push({
+          issueType: "CURRENCY_CONVERSION_UNAVAILABLE",
+          severity: "ERROR",
+          message: `${mapped.sku}: Cannot normalize ${rawCurrency} quote because no configured conversion rate is available to the RFx currency ${targetCurrency || "(unknown)"}. Raw price was retained and the quote requires review.`,
+        });
+      } else {
+        const normalized = normalizeExtractedQuote({
+          price: adjustedPrice,
+          unit: adjustedUnit,
+          currency: rawCurrency,
+          targetCurrency,
+        });
+
+        if (normalized.status === "valid") {
+          normalizedPrice = normalized.normalizedPrice ?? null;
+          normalizedUnit = normalized.normalizedUnit ?? null;
+          normalizedCurrency = targetCurrency;
+          conversionMethod = rawCurrency === targetCurrency ? "IDENTITY" : "CONFIGURED_FX_RATE";
+          conversionRate = configuredConversionRate;
+          validationStatus = "VALID";
+        } else {
+          validationStatus = "AMBIGUOUS";
+          issues.push({
+            issueType: "CURRENCY_CONVERSION_UNAVAILABLE",
+            severity: "ERROR",
+            message: `${mapped.sku}: Could not normalize ${rawCurrency} quote to RFx currency ${targetCurrency}. ${normalized.reason ?? "Raw price was retained and the quote requires review."}`,
+          });
+        }
+      }
     } else if (priceValidation.status === "ambiguous") {
       validationStatus = "AMBIGUOUS";
       issues.push({
@@ -300,7 +341,6 @@ export async function processExtractedQuotes(input: {
     }
 
     // Check 2: Currency not recognised by the normalization layer
-    const rawCurrency = (extracted.currency ?? "").toUpperCase();
     if (rawCurrency && !KNOWN_CURRENCIES.has(rawCurrency)) {
       issues.push({
         issueType: "CURRENCY_UNKNOWN",
@@ -311,11 +351,17 @@ export async function processExtractedQuotes(input: {
     }
 
     // Check 3: Currency does not match the RFx's requested currency
-    if (rfxCurrency && rawCurrency && KNOWN_CURRENCIES.has(rawCurrency) && rawCurrency !== rfxCurrency.toUpperCase()) {
+    if (
+      rawCurrency
+      && targetCurrency
+      && rawCurrency !== targetCurrency
+      && normalizedPrice !== null
+      && conversionRate !== null
+    ) {
       issues.push({
         issueType: "CURRENCY_MISMATCH",
         severity: "WARNING",
-        message: `${mapped.sku}: Vendor quoted in ${rawCurrency} but RFx expects ${rfxCurrency.toUpperCase()}. Price has been converted.`,
+        message: `${mapped.sku}: Vendor quoted in ${rawCurrency} but RFx expects ${targetCurrency}. Price was converted using the configured rate ${conversionRate}.`,
       });
     }
 
@@ -338,6 +384,8 @@ export async function processExtractedQuotes(input: {
       normalizedPrice,
       normalizedUnit,
       normalizedCurrency,
+      conversionMethod,
+      conversionRate,
       moq: moqValidation.normalizedMoq,
       moqUnit: moqValidation.normalizedMoqUnit,
       validationStatus,
@@ -352,6 +400,9 @@ export async function processExtractedQuotes(input: {
   const failedCount = processedQuotes.filter((q) => q.validationStatus === "FAILED").length;
   const ambiguousCount = processedQuotes.filter((q) => q.validationStatus === "AMBIGUOUS").length;
   const missingCount = processedQuotes.filter((q) => q.validationStatus === "MISSING").length;
+  const conversionUnavailableCount = issues.filter(
+    (issue) => issue.issueType === "CURRENCY_CONVERSION_UNAVAILABLE",
+  ).length;
   if (processedQuotes.length === 0) {
     qualificationStatus = "REVIEW";
     issues.push({
@@ -367,6 +418,8 @@ export async function processExtractedQuotes(input: {
 
   if (failedCount > 0) {
     qualificationStatus = "FAILED";
+  } else if (conversionUnavailableCount > 0) {
+    qualificationStatus = "REVIEW";
   } else if (ambiguousCount > 0 || missingCount > 0) {
     if (failedCount === 0 && missingCount < lineItems.length * 0.3) {
       // Some ambiguity/missing but not critical
@@ -405,6 +458,8 @@ export async function saveProcessedQuotes(
     normalized_price: q.normalizedPrice,
     normalized_unit: q.normalizedUnit,
     normalized_currency: q.normalizedCurrency,
+    conversion_method: q.conversionMethod,
+    conversion_rate: q.conversionRate,
     moq: q.moq,
     moq_unit: q.moqUnit,
     mapping_status: q.mappingConfidence > 0.8 ? "MAPPED" : "UNMAPPED",

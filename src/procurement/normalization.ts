@@ -1,20 +1,36 @@
 export type CurrencyCode = "USD" | "EUR" | "GBP" | "INR" | "CAD" | "JPY";
 export type UnitCode = "pcs" | "kg" | "lb" | "mm" | "in" | "m" | "cm" | "g";
 
+/** Currency units per USD, used for deterministic quote normalization. */
+export const CURRENCY_USD_RATES: Record<CurrencyCode, number> = {
+  USD: 1,
+  EUR: 0.92,
+  GBP: 0.79,
+  INR: 83.4,
+  CAD: 1.36,
+  JPY: 157.5,
+};
+
+/**
+ * Return the configured multiplier for converting from one currency to another.
+ * Returns null rather than fabricating a rate when either code is unsupported.
+ */
+export function getCurrencyConversionRate(from: string, to: string): number | null {
+  const fromRate = CURRENCY_USD_RATES[from.toUpperCase() as CurrencyCode];
+  const toRate = CURRENCY_USD_RATES[to.toUpperCase() as CurrencyCode];
+
+  if (!fromRate || !toRate) return null;
+  return Number((toRate / fromRate).toFixed(8));
+}
+
 export function normalizeCurrency(price: number, from: CurrencyCode, to: CurrencyCode): number {
   if (from === to) return Number(price.toFixed(2));
 
-  const fx: Record<CurrencyCode, number> = {
-    USD: 1,
-    EUR: 0.92,
-    GBP: 0.79,
-    INR: 83.4,
-    CAD: 1.36,
-    JPY: 157.5,
-  };
-
-  const usdValue = price / fx[from];
-  return Number((usdValue * fx[to]).toFixed(2));
+  const rate = getCurrencyConversionRate(from, to);
+  if (rate === null) {
+    throw new Error(`No configured currency conversion rate from ${from} to ${to}`);
+  }
+  return Number((price * rate).toFixed(2));
 }
 
 export function normalizeUnit(value: number, from: UnitCode, to: UnitCode): number {

@@ -15,7 +15,7 @@ import {
   runKillerScenario,
   parseUnitFactor,
 } from "@/procurement/engine";
-import { processExtractedQuotes } from "@/procurement/extraction-pipeline";
+import { processExtractedQuotes, saveProcessedQuotes } from "@/procurement/extraction-pipeline";
 
 test("converts currency and units deterministically", () => {
   assert.equal(normalizeCurrency(100, "USD", "EUR"), 92);
@@ -214,4 +214,135 @@ test("parseUnitFactor resolves compound units into base unit + factor", () => {
   assert.deepEqual(parseUnitFactor("100 kgs"), { baseUnit: "kg", factor: 100 });
   assert.equal(parseUnitFactor(""), null);
   assert.equal(parseUnitFactor(null), null);
+});
+
+test("converts Vendor D USD per-unit quotes to INR before they are comparable", async () => {
+  const result = await processExtractedQuotes({
+    vendorId: "vendor-d",
+    vendorResponseId: "response-d",
+    rfxId: "rfx-inr",
+    rfxCurrency: "INR",
+    extraction: {
+      vendor: "Vendor D",
+      lead_time: null,
+      lead_time_days: null,
+      quotes: [
+        { sku_reference: "CP-001", price: 0.28, unit: "/unit", currency: "USD", conditions: null, confidence: 0.95 },
+        { sku_reference: "CP-002", price: 0.62, unit: "/unit", currency: "USD", conditions: null, confidence: 0.95 },
+      ],
+      questionnaire_answers: [],
+      commercial_terms: [],
+      exceptions: [],
+    },
+    lineItems: [
+      { id: "line-1", rfx_id: "rfx-inr", sku: "CP-001" },
+      { id: "line-2", rfx_id: "rfx-inr", sku: "CP-002" },
+    ],
+  });
+
+  assert.deepEqual(
+    result.processedQuotes.map((quote) => ({
+      rawPrice: quote.rawPrice,
+      normalizedPrice: quote.normalizedPrice,
+      normalizedCurrency: quote.normalizedCurrency,
+      conversionMethod: quote.conversionMethod,
+      conversionRate: quote.conversionRate,
+      validationStatus: quote.validationStatus,
+    })),
+    [
+      {
+        rawPrice: 0.28,
+        normalizedPrice: 23.35,
+        normalizedCurrency: "INR",
+        conversionMethod: "CONFIGURED_FX_RATE",
+        conversionRate: 83.4,
+        validationStatus: "VALID",
+      },
+      {
+        rawPrice: 0.62,
+        normalizedPrice: 51.71,
+        normalizedCurrency: "INR",
+        conversionMethod: "CONFIGURED_FX_RATE",
+        conversionRate: 83.4,
+        validationStatus: "VALID",
+      },
+    ],
+  );
+  assert.equal(result.issues.filter((issue) => issue.issueType === "CURRENCY_MISMATCH").length, 2);
+
+  const insertedRows: Array<Record<string, unknown>> = [];
+  const supabase = {
+    from: () => ({
+      delete: () => ({ eq: async () => ({ error: null }) }),
+      insert: async (rows: Array<Record<string, unknown>>) => {
+        insertedRows.push(...rows);
+        return { error: null };
+      },
+      update: () => ({ eq: async () => ({ error: null }) }),
+    }),
+  };
+  await saveProcessedQuotes(supabase, result);
+
+  assert.deepEqual(
+    insertedRows.map((row) => ({
+      normalized_price: row.normalized_price,
+      normalized_currency: row.normalized_currency,
+      conversion_method: row.conversion_method,
+      conversion_rate: row.conversion_rate,
+    })),
+    [
+      {
+        normalized_price: 23.35,
+        normalized_currency: "INR",
+        conversion_method: "CONFIGURED_FX_RATE",
+        conversion_rate: 83.4,
+      },
+      {
+        normalized_price: 51.71,
+        normalized_currency: "INR",
+        conversion_method: "CONFIGURED_FX_RATE",
+        conversion_rate: 83.4,
+      },
+    ],
+  );
+});
+
+test("retains a raw quote and requires review when a currency cannot be converted", async () => {
+  const result = await processExtractedQuotes({
+    vendorId: "vendor-unknown-currency",
+    vendorResponseId: "response-unknown-currency",
+    rfxId: "rfx-inr",
+    rfxCurrency: "INR",
+    extraction: {
+      vendor: "Unknown Currency Vendor",
+      lead_time: null,
+      lead_time_days: null,
+      quotes: [{ sku_reference: "CP-001", price: 10, unit: "pcs", currency: "AUD", conditions: null, confidence: 0.95 }],
+      questionnaire_answers: [],
+      commercial_terms: [],
+      exceptions: [],
+    },
+    lineItems: [{ id: "line-1", rfx_id: "rfx-inr", sku: "CP-001" }],
+  });
+
+  assert.deepEqual(result.processedQuotes[0], {
+    lineItemId: "line-1",
+    sku: "CP-001",
+    rawPrice: 10,
+    rawUnit: "pcs",
+    rawCurrency: "AUD",
+    normalizedPrice: null,
+    normalizedUnit: null,
+    normalizedCurrency: null,
+    conversionMethod: null,
+    conversionRate: null,
+    moq: null,
+    moqUnit: null,
+    validationStatus: "AMBIGUOUS",
+    mappingConfidence: 0.95,
+    sourceReference: null,
+  });
+  assert.equal(result.qualificationStatus, "REVIEW");
+  assert.equal(result.issues.some((issue) => issue.issueType === "CURRENCY_CONVERSION_UNAVAILABLE" && issue.severity === "ERROR"), true);
+  assert.equal(result.issues.some((issue) => issue.issueType === "CURRENCY_MISMATCH"), false);
 });
