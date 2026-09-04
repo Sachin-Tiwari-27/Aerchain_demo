@@ -124,23 +124,6 @@ export async function POST(req: NextRequest) {
         };
         let recommendationData = fallbackRecommendation;
 
-      const completedResult = result as unknown as { success?: boolean; data?: unknown };
-      if (typeof question === "string" && question.trim() && completedResult.success) {
-        try {
-          const response = await generateStructured({
-            schema: z.object({ reply: z.string().min(1) }),
-            prompt: `Answer the buyer's question using only the deterministic tool result below. Explain the result clearly and concisely, mention important exceptions or missing data, and do not invent, recalculate, or change any numbers. The structured result card is also shown to the buyer, so focus on the conclusion and the reasons behind it. Buyer question: ${question}\n\nTool used: ${resolvedToolName}\n\nTool result JSON: ${JSON.stringify(completedResult.data)}`,
-            useCase: "analyst-recommendation",
-            documentKind: "text-derived",
-          });
-          aiReply = response.data.reply;
-          provenance = response.provenance;
-          model = response.model;
-        } catch {
-          // The deterministic tool result remains usable if the narrative call fails.
-          aiReply = aiReply || `I ran ${resolvedToolName.replace(/_/g, " ")}. Review the structured result below.`;
-        }
-      }
         let recommendationProvenance = null;
         let recommendationModel = null;
         try {
@@ -236,6 +219,23 @@ export async function POST(req: NextRequest) {
           { error: `Unknown tool: ${toolName}` },
           { status: 400 },
         );
+    }
+
+    const completedResult = result as unknown as { success?: boolean; data?: unknown };
+    if (typeof question === "string" && question.trim() && completedResult.success) {
+      try {
+        const response = await generateStructured({
+          schema: z.object({ reply: z.string().min(1) }),
+          prompt: `Answer the buyer's question using only the deterministic tool result below. Explain the result clearly and concisely, state a direct yes/no conclusion when the question asks whether something is feasible, mention important exceptions or missing data, and do not invent, recalculate, or change any numbers. The structured result card is also shown to the buyer, so focus on the conclusion and the reasons behind it. Buyer question: ${question}\n\nTool used: ${resolvedToolName}\n\nTool result JSON: ${JSON.stringify(completedResult.data)}`,
+          useCase: "analyst-recommendation",
+          documentKind: "text-derived",
+        });
+        aiReply = response.data.reply;
+        provenance = response.provenance;
+        model = response.model;
+      } catch {
+        aiReply = `The deterministic result shows ${resolvedToolName.replace(/_/g, " ")}. Review the structured result below for the supporting details.`;
+      }
     }
 
     return NextResponse.json({ ...result, question, selectedTool: resolvedToolName, aiReply, provenance, model });

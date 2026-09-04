@@ -110,7 +110,7 @@ export default function AskPage() {
       const res = await fetch("/api/analyst-tool", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rfxId, toolName }),
+        body: JSON.stringify({ rfxId, toolName, question: promptText }),
       });
 
       const data = await res.json();
@@ -144,6 +144,7 @@ export default function AskPage() {
     setResult(null);
     const promptText = question.trim();
     setChatMessages((current) => [...current, { role: "buyer", text: promptText }]);
+    setQuestion("");
     addLog("AI analyst API requested", `Question: ${promptText}`, "running");
     try {
       const res = await fetch("/api/analyst-tool", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rfxId, question: promptText }) });
