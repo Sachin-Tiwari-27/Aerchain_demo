@@ -285,6 +285,40 @@ export async function runAwardScenario(
     });
 
     const vendorsUsed = Object.keys(vendorCounts).length;
+
+    // A scenario with no comparable awards is still a valid deterministic result:
+    // it lets buyers see why no award can be made instead of turning the empty
+    // cost map below into a reduce() error.
+    if (Object.keys(awardByLineItem).length === 0) {
+      const message = "No eligible VALID quotes match the RFx comparison basis; an award cannot be finalized.";
+
+      return {
+        toolName: "run_award_scenario",
+        success: true,
+        data: {
+          scenario: "cheapest_per_line_qualified_vendors",
+          award: awardByLineItem,
+          summary: {
+            totalAwardCost: 0,
+            totalCurrentCost: null,
+            totalSavings: null,
+            savingsPercent: null,
+            baselineAvailable: false,
+            baselineMessage: "Current contract baseline is unavailable because no SKUs were awarded",
+            vendorsUsed: 0,
+            concentrationPercent: "0",
+            constraintsSatisfied: {
+              minVendorsMet: false,
+              concentrationMet: false,
+              message,
+            },
+          },
+          excludedSkus,
+          risks: message,
+        },
+      };
+    }
+
     const concentrationVendor = Object.entries(vendorCosts).reduce((a, b) =>
       b[1] > a[1] ? b : a,
     );
