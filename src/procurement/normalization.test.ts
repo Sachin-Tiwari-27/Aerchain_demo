@@ -16,6 +16,34 @@ import {
   parseUnitFactor,
 } from "@/procurement/engine";
 import { processExtractedQuotes } from "@/procurement/extraction-pipeline";
+import { vendorQuoteExtractionSchema } from "@/ai/extraction";
+
+test("normalizes safe raw extraction variants without making ambiguous prices spendable", () => {
+  const result = vendorQuoteExtractionSchema.parse({
+    vendor: "Variant Supplier",
+    quotes: [
+      { sku_reference: "FIRM", price: "12.50" },
+      { sku_reference: "RANGE", price: { min: "10", max: 15, raw_text: "$10-$15", reason: "volume range" } },
+      { sku_reference: "REBATE", price: { amount: 9, raw_text: "$9 after rebate", rebate: "annual volume" } },
+      { sku_reference: "CONVERT", price: { amount: 10, converted_from: "EUR", exchange_rate: 1.1 } },
+    ],
+    questionnaire_answers: { quality: "approved", packaging: "recyclable" },
+    commercial_terms: { payment_terms: "Net 30", freight: { included: true } },
+    exceptions: { price: "Confirm range" },
+  });
+
+  assert.equal(result.quotes[0].price, 12.5);
+  assert.equal(result.quotes[0].price_status, "explicit");
+  assert.equal(result.quotes[1].price, null);
+  assert.equal(result.quotes[1].price_range_min, 10);
+  assert.equal(result.quotes[1].price_range_max, 15);
+  assert.equal(result.quotes[1].raw_price_text, "$10-$15");
+  assert.equal(result.quotes[2].price_status, "ambiguous");
+  assert.equal(result.quotes[2].price_is_conditional, true);
+  assert.equal(result.quotes[3].price, null);
+  assert.deepEqual(result.commercial_terms.map((term) => term.key), ["freight", "payment_terms"]);
+  assert.deepEqual(result.questionnaire_answers.map((answer) => answer.key), ["packaging", "quality"]);
+});
 
 test("converts currency and units deterministically", () => {
   assert.equal(normalizeCurrency(100, "USD", "EUR"), 92);
