@@ -156,6 +156,57 @@ test("normalizes extracted quotes and flags missing unit-to-piece conversion evi
   assert.equal(ambiguous.status, "ambiguous");
 });
 
+test("keeps mass-priced piece quotes raw when no mass-per-piece basis is documented", async () => {
+  const result = await processExtractedQuotes({
+    vendorId: "vendor-1",
+    vendorResponseId: "response-1",
+    rfxId: "rfx-1",
+    rfxCurrency: "USD",
+    extraction: {
+      vendor: "Mass supplier",
+      lead_time: null,
+      lead_time_days: null,
+      quotes: [{ sku_reference: "CP-001", price: 42, unit: "kg", currency: "USD", conditions: null, confidence: 0.9 }],
+      questionnaire_answers: [],
+      commercial_terms: [],
+      exceptions: [],
+    },
+    lineItems: [{ id: "line-1", rfx_id: "rfx-1", sku: "CP-001", unit: "pcs" }],
+  });
+
+  const [quote] = result.processedQuotes;
+  assert.equal(quote.rawPrice, 42);
+  assert.equal(quote.normalizedPrice, null);
+  assert.equal(quote.validationStatus, "AMBIGUOUS");
+  assert.equal(result.issues.some((issue) => issue.issueType === "UNIT_CONVERSION_MISSING_BASIS"), true);
+});
+
+test("uses the RFx line item and currency as explicit normalized quote targets", async () => {
+  const result = await processExtractedQuotes({
+    vendorId: "vendor-1",
+    vendorResponseId: "response-1",
+    rfxId: "rfx-1",
+    rfxCurrency: "INR",
+    extraction: {
+      vendor: "Supplier",
+      lead_time: null,
+      lead_time_days: null,
+      quotes: [{ sku_reference: "CP-001", price: 100, unit: "per 100 pcs", currency: "USD", conditions: null, confidence: 0.9 }],
+      questionnaire_answers: [],
+      commercial_terms: [],
+      exceptions: [],
+    },
+    lineItems: [{ id: "line-1", rfx_id: "rfx-1", sku: "CP-001", unit: "pcs" }],
+  });
+
+  const [quote] = result.processedQuotes;
+  assert.equal(quote.normalizedPrice, 83.4);
+  assert.equal(quote.normalizedUnit, "pcs");
+  assert.equal(quote.normalizedCurrency, "INR");
+  assert.equal(quote.conversionMethod, "CURRENCY_FX_AND_UNIT_FACTOR");
+  assert.match(quote.conversionBasis ?? "", /USD to INR FX/);
+});
+
 test("treats missing MOQ as neutral and only fails when stated MOQ violates the order quantity", () => {
   assert.equal(
     validateMoq({ annualQuantity: 120000, quoteMoq: null, moqUnit: "pcs" }).status,

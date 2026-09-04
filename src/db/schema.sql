@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS vendor_quotes (
   normalized_currency TEXT,
   conversion_method TEXT,
   conversion_rate NUMERIC,
+  conversion_basis TEXT,
   mapping_status TEXT NOT NULL DEFAULT 'UNMAPPED',
   validation_status TEXT NOT NULL DEFAULT 'REVIEW',
   confidence NUMERIC,
