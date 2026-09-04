@@ -28,10 +28,19 @@ interface ExtractionResult {
   success: boolean;
   vendorResponseId?: string;
   error?: string;
+  diagnostics?: Array<{
+    provider: string;
+    model: string;
+    attempt: number;
+    promptVariant: "primary" | "strict-retry";
+    failureType: "provider-unavailable" | "invalid-json" | "schema-incompatible";
+    message: string;
+  }>;
   metadata?: {
     provider: string;
     model: string;
     fallbackAttempts: number;
+    diagnostics: ExtractionResult["diagnostics"];
   };
 }
 
@@ -171,11 +180,22 @@ export default function ResponsesPage() {
         );
         return true;
       } else {
-        recordActivity("Responses", "Extraction failed", result.error || doc.filename, "error");
+        const schemaFailure = result.diagnostics?.some(
+          (diagnostic) => diagnostic.failureType === "schema-incompatible",
+        );
+        const providerUnavailable = result.diagnostics?.some(
+          (diagnostic) => diagnostic.failureType === "provider-unavailable",
+        );
+        const failureDetail = schemaFailure
+          ? `Incompatible vendor JSON: ${result.error || doc.filename}`
+          : providerUnavailable
+            ? `Provider unavailable: ${result.error || doc.filename}`
+            : result.error || doc.filename;
+        recordActivity("Responses", "Extraction failed", failureDetail, "error");
         setDocuments((prev) =>
           prev.map((d) => (d.id === docId ? { ...d, processing_status: "ERROR" } : d)),
         );
-        console.error("Extraction failed:", result.error);
+        console.error("Extraction failed:", { error: result.error, diagnostics: result.diagnostics });
         return false;
       }
     } catch (error) {
@@ -408,4 +428,3 @@ export default function ResponsesPage() {
     </div>
   );
 }
-

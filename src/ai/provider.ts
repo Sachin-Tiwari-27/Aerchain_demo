@@ -30,7 +30,32 @@ export type StructuredGenerationResult<T> = {
     providerChain: ProviderName[];
     usedProvider: ProviderName;
   };
+  diagnostics: ProviderDiagnostic[];
 };
+
+export type ProviderDiagnostic = {
+  provider: ProviderName;
+  model: string;
+  attempt: 1 | 2;
+  promptVariant: "primary" | "strict-retry";
+  failureType: "provider-unavailable" | "invalid-json" | "schema-incompatible";
+  message: string;
+  schemaIssues?: Array<{
+    path: PropertyKey[];
+    code: string;
+    message: string;
+  }>;
+};
+
+export class StructuredGenerationError extends Error {
+  constructor(
+    message: string,
+    public readonly diagnostics: ProviderDiagnostic[],
+  ) {
+    super(message);
+    this.name = "StructuredGenerationError";
+  }
+}
 
 export type GenerateStructuredOptions<T> = {
   schema: z.ZodType<T>;
@@ -38,6 +63,7 @@ export type GenerateStructuredOptions<T> = {
   documentKind?: DocumentKind;
   useCase?: UseCase;
   media?: { mimeType: string; data: string };
+  /** Returns a schema-specific repair prompt after a valid JSON response fails validation. */
   onInvalid?: (result: unknown) => string;
 };
 
@@ -177,6 +203,27 @@ function getModel(provider: ProviderName, useCase: UseCase): string {
 
 function strictifyPrompt(prompt: string): string {
   return `${prompt}\n\nReturn valid JSON only. Do not include markdown fences. The top-level response must be a JSON object, never an array. Be strict: if information is missing, use null/empty arrays; never invent a price or currency.`;
+}
+
+/**
+ * Repair instructions for the vendor quote extraction contract. Keep this separate
+ * from the original extraction request so a retry corrects the invalid JSON shape
+ * rather than merely repeating the same task.
+ */
+export function vendorExtractionRepairPrompt(prompt: string): string {
+  return `${prompt}\n\nYour previous response was valid JSON but did not match the vendor extraction schema. Repair it and return only the corrected JSON object (no markdown fences).\n\nRequired repair rules:\n- \`quotes\` must be an array.\n- Every quote \`price\` must be a JSON number or \`null\`; never return an object, string, range, or currency-formatted value.\n- \`commercial_terms\`, \`questionnaire_answers\`, and \`exceptions\` must each be arrays.\n- For any ambiguous, conditional, or ranged price, set \`price\` to \`null\`, set \`price_type\` to \`"ambiguous"\`, and explain the ambiguity in that quote's \`conditions\` or in \`exceptions\`.\n- Do not invent values. Use \`null\` or empty arrays where the source does not provide a value.`;
+}
+
+function schemaIssues(error: z.ZodError): ProviderDiagnostic["schemaIssues"] {
+  return error.issues.map((issue) => ({
+    path: issue.path,
+    code: issue.code,
+    message: issue.message,
+  }));
+}
+
+function diagnosticMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function parseJsonPayload(text: string): unknown {
@@ -343,40 +390,55 @@ export async function generateStructured<T>({
   documentKind = "text-derived",
   useCase = "rfx-json",
   media,
+  onInvalid,
 }: GenerateStructuredOptions<T>): Promise<StructuredGenerationResult<T>> {
   const chain = getProviderChain(useCase);
   let lastError: unknown;
   let lastProvider: ProviderName | null = null;
   let lastModel = "";
-  let schemaFailed = false;
+  const diagnostics: ProviderDiagnostic[] = [];
 
   for (const provider of chain) {
-    if (schemaFailed) break;
     const model = getModel(provider, useCase);
     lastProvider = provider;
     lastModel = model;
 
-    const attempts = [prompt, strictifyPrompt(prompt)];
+    let repairPrompt = strictifyPrompt(prompt);
 
-    for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+    for (let attemptIndex = 0; attemptIndex < 2; attemptIndex += 1) {
+      const promptVariant = attemptIndex === 0 ? "primary" : "strict-retry";
       try {
-        const result = await callProvider(provider, attempts[attemptIndex], model, documentKind, media);
+        const result = await callProvider(
+          provider,
+          attemptIndex === 0 ? prompt : repairPrompt,
+          model,
+          documentKind,
+          media,
+        );
         const parsed = schema.safeParse(result);
 
         if (!parsed.success) {
+          const diagnostic: ProviderDiagnostic = {
+            provider,
+            model,
+            attempt: (attemptIndex + 1) as 1 | 2,
+            promptVariant,
+            failureType: "schema-incompatible",
+            message: parsed.error.message,
+            schemaIssues: schemaIssues(parsed.error),
+          };
+          diagnostics.push(diagnostic);
+          console.warn("Structured generation returned schema-incompatible JSON", diagnostic);
+          lastError = parsed.error;
+
           if (attemptIndex === 0) {
-            lastError = parsed.error;
+            repairPrompt = onInvalid?.(result) ?? repairPrompt;
             continue;
           }
 
-          // If the second attempt is still not a valid schema match, stop
-          // here and do not fall through to a different provider. The
-          // model gave us a well-formed JSON object but it does not fit
-          // the requested contract; that is an application-level issue,
-          // not a transient provider failure, and another provider is
-          // extremely unlikely to produce a better match.
-          schemaFailed = true;
-          throw new Error(`Schema validation failed on ${provider}: ${parsed.error.message}`);
+          // A provider that returned two incompatible JSON objects should not
+          // block the rest of the configured provider chain.
+          break;
         }
 
         return {
@@ -387,25 +449,33 @@ export async function generateStructured<T>({
           provenance: {
             documentKind,
             useCase,
-            promptVariant: attemptIndex === 0 ? "primary" : "strict-retry",
+            promptVariant,
             providerChain: chain,
             usedProvider: provider,
           },
+          diagnostics,
         };
       } catch (error) {
         lastError = error;
-        if (attemptIndex === 0) {
-          continue;
-        }
-        break;
+        const diagnostic: ProviderDiagnostic = {
+          provider,
+          model,
+          attempt: (attemptIndex + 1) as 1 | 2,
+          promptVariant,
+          failureType: error instanceof SyntaxError ? "invalid-json" : "provider-unavailable",
+          message: diagnosticMessage(error),
+        };
+        diagnostics.push(diagnostic);
+        console.warn("Structured generation provider attempt failed", diagnostic);
       }
     }
   }
 
-  throw new Error(
+  throw new StructuredGenerationError(
     `No provider in the chain produced a valid extraction for ${useCase} [${lastProvider ? providerTag(lastProvider) : "AI"} ${lastModel || "unknown model"}]. Last error: ${
       lastError instanceof Error ? lastError.message : String(lastError)
     }`,
+    diagnostics,
   );
 }
 

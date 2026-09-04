@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "eslint",
     "seed": "tsx src/seed/seed.ts",
-    "test": "tsx --test src/procurement/normalization.test.ts"
+    "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.109.0",
