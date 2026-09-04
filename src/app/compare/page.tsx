@@ -12,7 +12,6 @@ interface Vendor {
   id: string;
   name: string;
   status: "QUALIFIED" | "QUALIFIED_WITH_EXCEPTIONS" | "REVIEW" | "FAILED";
-  share: string;
 }
 
 interface SKU {
@@ -151,7 +150,6 @@ export default function ComparePage() {
           id: v.id,
           name: v.name,
           status: (responseByVendor[v.id] || "REVIEW") as "QUALIFIED" | "QUALIFIED_WITH_EXCEPTIONS" | "REVIEW" | "FAILED",
-          share: "—", // TODO: calculate from award allocation
         }));
         setVendors(vendorList);
 
@@ -325,8 +323,6 @@ export default function ComparePage() {
                     {vendor.status.replace(/_/g, " ")}
                   </span>
                 </div>
-                <p className="mt-3 text-2xl font-semibold">{vendor.share}</p>
-                <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">share cap <InfoButton label="Explain supplier share cap" onClick={() => setInfoKey("share-cap")} /></p>
               </div>
             ))}
           </section>
