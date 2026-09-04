@@ -157,6 +157,36 @@ test("normalizes extracted quotes and flags missing unit-to-piece conversion evi
   assert.equal(ambiguous.status, "ambiguous");
 });
 
+test("converts dollar-per-kilogram quotes to INR per piece when mass evidence is supplied", () => {
+  const converted = normalizeExtractedQuote({
+    price: 42,
+    currency: "USD",
+    unit: "kg",
+    targetCurrency: "INR",
+    targetUnit: "piece",
+    pieceMassKg: 0.25,
+  });
+
+  assert.equal(converted.status, "valid");
+  assert.equal(converted.normalizedPrice, 875.7);
+  assert.equal(converted.normalizedCurrency, "INR");
+  assert.equal(converted.normalizedUnit, "pcs");
+  assert.equal(converted.conversionMethod, "MASS_PER_PIECE_AND_CURRENCY_FX");
+});
+
+test("does not produce a numeric comparison price for unsupported currencies", () => {
+  const converted = normalizeExtractedQuote({
+    price: 42,
+    currency: "AUD",
+    unit: "pcs",
+    targetCurrency: "INR",
+    targetUnit: "pcs",
+  });
+
+  assert.equal(converted.status, "ambiguous");
+  assert.match(converted.reason ?? "", /AUD/);
+});
+
 test("keeps mass-priced piece quotes raw when no mass-per-piece basis is documented", async () => {
   const result = await processExtractedQuotes({
     vendorId: "vendor-1",
@@ -206,6 +236,31 @@ test("uses the RFx line item and currency as explicit normalized quote targets",
   assert.equal(quote.normalizedCurrency, "INR");
   assert.equal(quote.conversionMethod, "CURRENCY_FX_AND_UNIT_FACTOR");
   assert.match(quote.conversionBasis ?? "", /USD to INR FX/);
+});
+
+test("uses documented extracted mass evidence for kg-to-piece normalization", async () => {
+  const result = await processExtractedQuotes({
+    vendorId: "vendor-1",
+    vendorResponseId: "response-1",
+    rfxId: "rfx-1",
+    rfxCurrency: "INR",
+    extraction: {
+      vendor: "Supplier",
+      lead_time_days: 7,
+      quotes: [{ sku_reference: "CP-001", price: 42, unit: "kg", currency: "USD", piece_mass_kg: 0.25, conditions: null, confidence: 0.9 }],
+      questionnaire_answers: [],
+      commercial_terms: [],
+      exceptions: [],
+    },
+    lineItems: [{ id: "line-1", rfx_id: "rfx-1", sku: "CP-001", unit: "pcs" }],
+  });
+
+  const [quote] = result.processedQuotes;
+  assert.equal(quote.normalizedPrice, 875.7);
+  assert.equal(quote.normalizedCurrency, "INR");
+  assert.equal(quote.normalizedUnit, "pcs");
+  assert.equal(quote.validationStatus, "VALID");
+  assert.match(quote.conversionBasis ?? "", /0.25 kg per piece/);
 });
 
 test("treats missing MOQ as neutral and only fails when stated MOQ violates the order quantity", () => {
