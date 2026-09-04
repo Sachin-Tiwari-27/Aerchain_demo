@@ -140,7 +140,9 @@ export async function runAwardScenario(
       .eq("rfx_id", rfxId);
 
     const qualifiedVendorIds = new Set(
-      (responses || []).filter((r: any) => r.status === "QUALIFIED").map((r: any) => r.vendor_id),
+      (responses || [])
+        .filter((r: any) => r.status === "QUALIFIED" || r.status === "QUALIFIED_WITH_EXCEPTIONS")
+        .map((r: any) => r.vendor_id),
     );
 
     if (qualifiedVendorIds.size === 0) {

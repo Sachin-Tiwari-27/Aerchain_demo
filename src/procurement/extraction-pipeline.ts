@@ -43,6 +43,13 @@ type RfxLineItem = {
   description?: string | null;
   annual_quantity?: number | null;
   unit?: string | null;
+  ply?: number | null;
+  gsm?: number | null;
+  bursting_strength?: number | null;
+  bursting_strength_unit?: string | null;
+  length_mm?: number | null;
+  width_mm?: number | null;
+  height_mm?: number | null;
 };
 
 export type QuoteProcessingResult = {
@@ -64,6 +71,7 @@ export type QuoteProcessingResult = {
     validationStatus: "VALID" | "AMBIGUOUS" | "MISSING" | "FAILED";
     mappingConfidence: number;
     sourceReference: string | null;
+    failureReason: string | null;
   }>;
   qualificationStatus: "QUALIFIED" | "QUALIFIED_WITH_EXCEPTIONS" | "REVIEW" | "FAILED";
   issues: Array<{
@@ -72,6 +80,50 @@ export type QuoteProcessingResult = {
     message: string;
   }>;
 };
+
+type SpecificationValue = number | null | undefined;
+
+type SpecificationValidation = {
+  pass: boolean;
+  reason: string | null;
+};
+
+function formatSpecification(value: number | null | undefined, unit = ""): string {
+  return value === null || value === undefined ? "not stated" : `${value}${unit}`;
+}
+
+/** Compare only RFx requirements that are populated against vendor-stated quote values. */
+function validateMandatorySpecifications(
+  sku: string,
+  lineItem: RfxLineItem,
+  quote: { ply?: SpecificationValue; gsm?: SpecificationValue; bursting_strength?: SpecificationValue; bursting_strength_unit?: string | null; length_mm?: SpecificationValue; width_mm?: SpecificationValue; height_mm?: SpecificationValue },
+): SpecificationValidation {
+  const mismatches: string[] = [];
+  const compareNumber = (label: string, required: SpecificationValue, quoted: SpecificationValue, unit = "") => {
+    if (required !== null && required !== undefined && Number(required) !== Number(quoted)) {
+      mismatches.push(`${label}: required ${formatSpecification(required, unit)}, quoted ${formatSpecification(quoted, unit)}`);
+    }
+  };
+
+  compareNumber("ply", lineItem.ply, quote.ply, "-ply");
+  compareNumber("GSM", lineItem.gsm, quote.gsm, " GSM");
+  const burstingUnit = lineItem.bursting_strength_unit ? ` ${lineItem.bursting_strength_unit}` : "";
+  compareNumber("bursting strength", lineItem.bursting_strength, quote.bursting_strength, burstingUnit);
+  if (
+    lineItem.bursting_strength !== null && lineItem.bursting_strength !== undefined &&
+    lineItem.bursting_strength_unit &&
+    quote.bursting_strength_unit?.trim().toLowerCase() !== lineItem.bursting_strength_unit.trim().toLowerCase()
+  ) {
+    mismatches.push(`required bursting strength unit ${lineItem.bursting_strength_unit}, quoted ${quote.bursting_strength_unit ?? "not stated"}`);
+  }
+  compareNumber("length", lineItem.length_mm, quote.length_mm, " mm");
+  compareNumber("width", lineItem.width_mm, quote.width_mm, " mm");
+  compareNumber("height", lineItem.height_mm, quote.height_mm, " mm");
+
+  return mismatches.length > 0
+    ? { pass: false, reason: `${sku}: ${mismatches.join("; ")}` }
+    : { pass: true, reason: null };
+}
 
 /**
  * Map extracted quote items to line item IDs using confidence-based matching.
@@ -93,6 +145,13 @@ export function mapQuotesToLineItems(
     confidence?: number | null;
     source_reference?: string | null;
     price_type?: string;
+    ply?: number | null;
+    gsm?: number | null;
+    bursting_strength?: number | null;
+    bursting_strength_unit?: string | null;
+    length_mm?: number | null;
+    width_mm?: number | null;
+    height_mm?: number | null;
   }>,
   lineItems: RfxLineItem[],
 ): Array<{
@@ -212,13 +271,14 @@ export async function processExtractedQuotes(input: {
     // Guard: annual_quantity may be null/0; fall back to a safe positive minimum
     // so validateQuote never fails with "Quantity must be positive" on metadata gaps.
     const safeQuantity = Math.max(1, Number(lineItem.annual_quantity ?? 1));
+    const specificationValidation = validateMandatorySpecifications(mapped.sku, lineItem, extracted);
     const priceValidation: any = validateQuote({
       price: extracted.price ?? null,
       currency: (extracted.currency ?? undefined) as string | undefined,
       unit: (extracted.unit ?? undefined) as string | undefined,
       quantity: safeQuantity,
       leadTimeDays: extraction.lead_time_days ?? 0,
-      mandatorySpecPass: true,  // Assume pass unless flagged in extraction exceptions
+      mandatorySpecPass: specificationValidation.pass,
     });
 
     // Normalize the quote using existing normalization logic
@@ -226,6 +286,7 @@ export async function processExtractedQuotes(input: {
     let normalizedUnit: string | null = null;
     let normalizedCurrency: string | null = null;
     let validationStatus: "VALID" | "AMBIGUOUS" | "MISSING" | "FAILED" = "MISSING";
+    let failureReason: string | null = null;
 
     if (priceValidation.status === "valid") {
       // Resolve compound units like "1000 units" or "per kg" into a
@@ -262,10 +323,24 @@ export async function processExtractedQuotes(input: {
       });
     } else {
       validationStatus = "FAILED";
+      failureReason = specificationValidation.reason ?? `${mapped.sku}: ${priceValidation.reason}`;
       issues.push({
-        issueType: "PRICE_INVALID",
+        issueType: specificationValidation.pass ? "PRICE_INVALID" : "MANDATORY_SPEC_MISMATCH",
         severity: "ERROR",
-        message: `${mapped.sku}: ${priceValidation.reason}`,
+        message: failureReason,
+      });
+    }
+
+    // A missing or ambiguous price must not mask a specification mismatch.
+    // validateQuote receives the mandatory-spec result, but price state is
+    // intentionally evaluated first there for its generic callers.
+    if (!specificationValidation.pass && priceValidation.status !== "failed") {
+      validationStatus = "FAILED";
+      failureReason = specificationValidation.reason ?? `${mapped.sku}: Mandatory specification failed`;
+      issues.push({
+        issueType: "MANDATORY_SPEC_MISMATCH",
+        severity: "ERROR",
+        message: failureReason,
       });
     }
 
@@ -284,6 +359,7 @@ export async function processExtractedQuotes(input: {
         message: moqValidation.reason,
       });
       validationStatus = "FAILED";
+      failureReason ??= `${mapped.sku}: ${moqValidation.reason}`;
     } else if (moqValidation.status !== "not-stated") {
       // MOQ is stated and valid
     }
@@ -343,6 +419,7 @@ export async function processExtractedQuotes(input: {
       validationStatus,
       mappingConfidence: mapped.confidence,
       sourceReference: extracted.source_reference ?? null,
+      failureReason,
     };
   });
 
@@ -366,7 +443,11 @@ export async function processExtractedQuotes(input: {
   }
 
   if (failedCount > 0) {
-    qualificationStatus = "FAILED";
+    // Eligibility is line-specific: retain a vendor's valid lines when another
+    // line fails a mandatory specification.
+    qualificationStatus = processedQuotes.some((quote) => quote.validationStatus === "VALID")
+      ? "QUALIFIED_WITH_EXCEPTIONS"
+      : "FAILED";
   } else if (ambiguousCount > 0 || missingCount > 0) {
     if (failedCount === 0 && missingCount < lineItems.length * 0.3) {
       // Some ambiguity/missing but not critical
@@ -374,6 +455,11 @@ export async function processExtractedQuotes(input: {
     } else {
       qualificationStatus = "REVIEW";
     }
+  }
+
+  // Lead time is a response-wide policy, unlike per-line specifications.
+  if ((extraction.lead_time_days ?? 0) > 14) {
+    qualificationStatus = "FAILED";
   }
 
   return {
@@ -413,6 +499,7 @@ export async function saveProcessedQuotes(
     source_document_id: result.sourceDocumentId,
     source_reference: q.sourceReference,
     conditions: null,
+    failure_reason: q.failureReason,
   }));
 
   // Clear existing quotes for this vendor/response

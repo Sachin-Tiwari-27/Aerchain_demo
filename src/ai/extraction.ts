@@ -56,6 +56,16 @@ export const vendorQuoteExtractionSchema = z.object({
       currency: z.string().nullable().optional(),
       moq: z.number().nullable().optional(),
       moq_unit: z.string().nullable().optional(),
+      // Specifications explicitly stated by the vendor for this quoted line.
+      // Keep these separate from the requested RFx requirements so eligibility
+      // can be determined from supplier-provided evidence only.
+      ply: z.number().nullable().optional(),
+      gsm: z.number().nullable().optional(),
+      bursting_strength: z.number().nullable().optional(),
+      bursting_strength_unit: z.string().nullable().optional(),
+      length_mm: z.number().nullable().optional(),
+      width_mm: z.number().nullable().optional(),
+      height_mm: z.number().nullable().optional(),
       conditions: conditionsShape.optional(),
       confidence: z.number().min(0).max(1).nullable().optional(),
       confidence_score: z.number().min(0).max(1).nullable().optional(),
@@ -144,6 +154,11 @@ CRITICAL REQUIREMENTS:
    - unit: The unit of measurement (e.g., "piece", "kg", "meter"). Required.
    - currency: The currency code (e.g., "INR", "USD", "EUR"). Required.
    - moq: Minimum order quantity as a number (e.g., 5000). Use null if not stated.
+   - ply: The vendor-stated board ply count as a number (e.g., 5). Use null if not stated.
+   - gsm: The vendor-stated grammage in GSM as a number (e.g., 180). Use null if not stated.
+   - bursting_strength: The vendor-stated bursting strength as a number. Use null if not stated.
+   - bursting_strength_unit: The unit accompanying bursting_strength (e.g., "kg/cm2"). Use null if not stated.
+   - length_mm, width_mm, height_mm: Vendor-stated dimensions converted to millimetres. Use null for each dimension not stated.
 
 Rules for extraction:
 - Return a single JSON object at the top level. Do not return an array.
