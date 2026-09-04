@@ -11,7 +11,7 @@ export function qualifySupplier(input: {
   if (!input.isQualityPass) reasons.push("Quality questionnaire failed");
   if (!input.mandatorySpecPass) reasons.push("Mandatory specification failed");
   if (!input.moqOk) reasons.push("MOQ not satisfied");
-  if (input.leadTimeDays > 21) reasons.push("Lead time exceeds policy");
+  if (input.leadTimeDays > 14) reasons.push("Lead time exceeds 14-day policy");
   if (input.sharePercent > 70) reasons.push("Vendor share exceeds concentration cap");
 
   if (reasons.length > 0) {

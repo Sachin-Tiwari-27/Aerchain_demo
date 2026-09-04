@@ -30,8 +30,8 @@ export function validateQuote(input: {
     return { status: "failed" as const, reason: "Quantity must be positive" };
   }
 
-  if (leadTimeDays > 30) {
-    return { status: "failed" as const, reason: "Lead time exceeds policy" };
+  if (leadTimeDays > 14) {
+    return { status: "failed" as const, reason: "Lead time exceeds 14-day policy" };
   }
 
   if (!mandatorySpecPass) {

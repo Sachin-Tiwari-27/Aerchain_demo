@@ -4,6 +4,7 @@ import { generateStructured, type DocumentKind, type UseCase } from "@/ai/provid
 
 export const vendorQuoteExtractionSchema = z.object({
   vendor: z.string().min(1),
+  lead_time_days: z.number().nullable().optional(),
   quotes: z.array(
     z.object({
       sku_reference: z.string().nullable().optional(),
@@ -42,7 +43,8 @@ export async function extractVendorDocument(input: ExtractVendorDocumentInput) {
 
 CRITICAL REQUIREMENTS:
 1. VENDOR NAME: Extract the supplier/vendor name. Must be a non-empty string (e.g., "VENDOR A", "Apex Corrugates").
-2. QUOTES ARRAY: Extract each quote/line item with these fields:
+2. LEAD TIME: Extract the supplier's stated standard lead time in days as lead_time_days. Use null if not stated.
+3. QUOTES ARRAY: Extract each quote/line item with these fields:
    - sku_reference: The SKU code or part number from the quote (e.g., "CP-001", "SKU-123"). Required.
    - description: The product description from the quote (e.g., "Small D2C Shipping Box"). Required.
    - price: The unit price as a number (e.g., 8.50). Use null if missing.
@@ -52,7 +54,7 @@ CRITICAL REQUIREMENTS:
 
 Rules for extraction:
 - Return a single JSON object at the top level. Do not return an array.
-- The object must contain exactly these keys: vendor, quotes, questionnaire_answers, commercial_terms, exceptions.
+- The object must contain exactly these keys: vendor, lead_time_days, quotes, questionnaire_answers, commercial_terms, exceptions.
 - Distinguish explicit, derived, ambiguous, and missing prices.
 - Keep only seller-supplied values; do not invent SKU codes or descriptions.
 - If any required field is missing, use null and record the reason in exceptions.

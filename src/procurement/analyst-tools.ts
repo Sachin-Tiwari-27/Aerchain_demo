@@ -29,27 +29,39 @@ export async function getComparison(
       return { toolName: "get_comparison", success: false, error: "No quotes found" };
     }
 
-    // Group by line_item_id, find best price
+    const [{ data: lineItems }, { data: vendors }] = await Promise.all([
+      supabase.from("rfx_line_items").select("id, sku").eq("rfx_id", rfxId),
+      supabase.from("vendors").select("id, name"),
+    ]);
+    const skuById = Object.fromEntries((lineItems || []).map((item: any) => [item.id, item.sku]));
+    const vendorById = Object.fromEntries((vendors || []).map((vendor: any) => [vendor.id, vendor.name]));
+
+    // Group by line item and return human-readable identifiers.
     const comparison: Record<
       string,
-      { lineItemId: string; bestVendor: string; bestPrice: number; allVendors: string[] }
+      { lineItemId: string; sku: string; bestVendor: string; bestVendorName: string; bestPrice: number; allVendors: string[]; vendorNames: string[] }
     > = {};
 
     (quotes as any[]).forEach((q) => {
       if (!comparison[q.line_item_id]) {
         comparison[q.line_item_id] = {
           lineItemId: q.line_item_id,
+          sku: skuById[q.line_item_id] || "Unknown SKU",
           bestVendor: q.vendor_id,
+          bestVendorName: vendorById[q.vendor_id] || "Unknown vendor",
           bestPrice: q.normalized_price,
           allVendors: [q.vendor_id],
+          vendorNames: [vendorById[q.vendor_id] || "Unknown vendor"],
         };
       } else {
         if (q.normalized_price < comparison[q.line_item_id].bestPrice) {
           comparison[q.line_item_id].bestVendor = q.vendor_id;
+          comparison[q.line_item_id].bestVendorName = vendorById[q.vendor_id] || "Unknown vendor";
           comparison[q.line_item_id].bestPrice = q.normalized_price;
         }
         if (!comparison[q.line_item_id].allVendors.includes(q.vendor_id)) {
           comparison[q.line_item_id].allVendors.push(q.vendor_id);
+          comparison[q.line_item_id].vendorNames.push(vendorById[q.vendor_id] || "Unknown vendor");
         }
       }
     });
@@ -152,7 +164,7 @@ export async function runAwardScenario(
     // Get line items for reference
     const { data: lineItems } = await supabase
       .from("rfx_line_items")
-      .select("id, sku, annual_quantity")
+      .select("id, sku, description, annual_quantity")
       .eq("rfx_id", rfxId);
 
     // Get vendors for names
@@ -181,7 +193,7 @@ export async function runAwardScenario(
       const skuQuotes = qualifiedQuotes.filter((q: any) => q.line_item_id === li.id);
 
       if (skuQuotes.length === 0) {
-        excludedSkus.push({ sku: li.sku, reason: "No quotes from qualified vendors" });
+        excludedSkus.push({ sku: li.description || li.sku, reason: "No quotes from qualified vendors" });
         return;
       }
 
@@ -197,7 +209,7 @@ export async function runAwardScenario(
         cheapest.moq > (li.annual_quantity || 0)
       ) {
         excludedSkus.push({
-          sku: li.sku,
+          sku: li.description || li.sku,
           reason: `MOQ ${cheapest.moq} exceeds annual quantity ${li.annual_quantity}`,
         });
         return;
@@ -250,7 +262,7 @@ export async function runAwardScenario(
         vendorsUsed < 2
           ? `Only ${vendorsUsed} vendor(s) used; minimum 2 required`
           : parseFloat(concentrationPercent as string) > 70
-            ? `${concentrationVendor[0]} has ${concentrationPercent}% share; max 70% allowed`
+            ? `${vendorMap[concentrationVendor[0]] || "A supplier"} has ${concentrationPercent}% share; max 70% allowed`
             : "✅ All constraints met",
     };
 

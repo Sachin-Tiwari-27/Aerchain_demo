@@ -45,6 +45,17 @@ test("qualifies vendors according to quality and commercial rules", () => {
 
   assert.equal(qualified.status, "qualified");
 
+  const overLeadTime = qualifySupplier({
+    isQualityPass: true,
+    leadTimeDays: 15,
+    moqOk: true,
+    mandatorySpecPass: true,
+    minRequiredVendors: 2,
+    sharePercent: 20,
+  });
+  assert.equal(overLeadTime.status, "fails");
+  assert.match(overLeadTime.reasons[0], /14-day/);
+
   const failed = qualifySupplier({
     isQualityPass: false,
     leadTimeDays: 40,

@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { RfxContextBar } from "@/components/layout/rfx-context-bar";
+import { recordActivity } from "@/lib/activity-log";
 
 interface Vendor {
   id: string;
@@ -41,6 +43,8 @@ interface EvidenceDocument {
 
 interface EvidenceQuote extends PriceCell {
   document: EvidenceDocument | null;
+  vendorName: string;
+  sku: string;
 }
 
 const formatPrice = (value: number | null) => {
@@ -86,9 +90,17 @@ export default function ComparePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceQuote | null>(null);
+  const [rfxName, setRfxName] = useState("Selected RFx");
+  const [qualifiedOnly, setQualifiedOnly] = useState(false);
+  const [comparableOnly, setComparableOnly] = useState(false);
+  const [includeReview, setIncludeReview] = useState(true);
+  const [showFailed, setShowFailed] = useState(true);
+  const [showConfidence, setShowConfidence] = useState(false);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     const loadData = async () => {
+      recordActivity("Compare", "Data refresh requested", "Loading latest quotes and evidence", "running");
       try {
         const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
         const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -99,13 +111,18 @@ export default function ComparePage() {
 
         const supabase = createClient(supabaseUrl, supabaseKey);
 
-        // Fetch the first RFx
-        const { data: rfxData } = await supabase.from("rfxs").select("*").limit(1);
-        if (!rfxData || rfxData.length === 0) {
+        // Use the draft selected in the RFx builder, with the seeded RFx as a fallback.
+        const selectedRfxId = window.localStorage.getItem("aerchain:selected-rfx-id");
+        const rfxQuery = supabase.from("rfxs").select("*");
+        const { data: rfxData } = selectedRfxId
+          ? await rfxQuery.eq("id", selectedRfxId).maybeSingle()
+          : await rfxQuery.limit(1).maybeSingle();
+        if (!rfxData) {
           setError("No RFx found");
           return;
         }
-        const rfxId = rfxData[0].id;
+        const rfxId = rfxData.id;
+        setRfxName(rfxData.name || "Untitled RFx");
 
         // Fetch vendors with their responses status
         const { data: vendorData } = await supabase.from("vendors").select("*");
@@ -141,7 +158,6 @@ export default function ComparePage() {
             description: li.description || "—",
           })),
         );
-
         // Fetch vendor quotes
         const { data: quotes } = await supabase
           .from("vendor_quotes")
@@ -182,7 +198,9 @@ export default function ComparePage() {
         });
 
         setPriceMatrix(matrix);
+        recordActivity("Compare", "Data refresh completed", `${quotes?.length ?? 0} extracted quotes loaded`, "success");
       } catch (err: any) {
+        recordActivity("Compare", "Data refresh failed", err.message || "Failed to load comparison data", "error");
         console.error("Error loading comparison data:", err);
         setError(err.message || "Failed to load comparison data");
       } finally {
@@ -191,7 +209,17 @@ export default function ComparePage() {
     };
 
     loadData();
-  }, []);
+    const refreshOnFocus = () => setRefreshToken((current) => current + 1);
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [refreshToken]);
+  const visibleVendors = vendors.filter((vendor) => {
+    if (qualifiedOnly && vendor.status !== "QUALIFIED") return false;
+    if (!includeReview && (vendor.status === "REVIEW" || vendor.status === "QUALIFIED_WITH_EXCEPTIONS")) return false;
+    if (!showFailed && vendor.status === "FAILED") return false;
+    return true;
+  });
+  const visibleSkus = skus.filter((sku) => !comparableOnly || visibleVendors.some((vendor) => priceMatrix[sku.id]?.[vendor.id]?.status === "VALID"));
   if (loading) {
     return (
       <div className="space-y-6">
@@ -221,16 +249,33 @@ export default function ComparePage() {
 
   return (
     <div className="space-y-6">
+      <RfxContextBar stage="Compare" />
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-700">Compare</p>
-        <h2 className="mt-3 text-2xl font-semibold">Vendor comparison</h2>
-        <p className="mt-2 max-w-2xl text-slate-600">
-          Real extracted and normalized vendor quotes. Qualification badges reflect extracted data
-          processing results.
-        </p>
+        <p className="text-xs font-bold uppercase tracking-[0.2em] text-sky-700">Step 3 · Compare</p>
+        <h2 className="mt-2 text-2xl font-semibold">{rfxName}</h2>
+        <p className="mt-1 text-lg font-semibold text-slate-800">Find the best eligible quote</p>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Compare normalized prices without losing the original supplier context. Select any value to inspect its source, conversion, and validation evidence.</p>
       </section>
 
-      {vendors.length === 0 ? (
+      <section className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Suppliers</p><p className="mt-2 text-2xl font-semibold text-slate-950">{vendors.length}</p><p className="mt-1 text-xs text-slate-500">with response status</p></div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">RFx scope</p><p className="mt-2 text-2xl font-semibold text-slate-950">{skus.length}</p><p className="mt-1 text-xs text-slate-500">line items to compare</p></div>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-emerald-700">Evidence-first</p><p className="mt-2 text-lg font-semibold text-emerald-950">Click any quote</p><p className="mt-1 text-xs text-emerald-800">to open its provenance</p></div>
+      </section>
+
+      <div className="flex justify-end"><button type="button" onClick={() => setRefreshToken((current) => current + 1)} disabled={loading} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-sky-400 hover:text-sky-700 disabled:opacity-50">{loading ? "Refreshing..." : "Refresh extracted data"}</button></div>
+
+      <section className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+        <span className="font-semibold text-slate-800">View</span>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={qualifiedOnly} onChange={(event) => setQualifiedOnly(event.target.checked)} /> Qualified only</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={comparableOnly} onChange={(event) => setComparableOnly(event.target.checked)} /> Comparable quotes only</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={includeReview} onChange={(event) => setIncludeReview(event.target.checked)} /> Include review</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={showFailed} onChange={(event) => setShowFailed(event.target.checked)} /> Show failed</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={showConfidence} onChange={(event) => setShowConfidence(event.target.checked)} /> Confidence</label>
+        <span className="ml-auto text-xs text-slate-500">{visibleSkus.length} SKUs · {visibleVendors.length} vendors</span>
+      </section>
+
+      {visibleVendors.length === 0 ? (
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <p className="text-slate-600">
             No vendor data yet. Run test extractions to populate this view.
@@ -239,7 +284,7 @@ export default function ComparePage() {
       ) : (
         <>
           <section className="grid gap-4 md:grid-cols-5">
-            {vendors.map((vendor) => (
+            {visibleVendors.map((vendor) => (
               <div
                 key={vendor.id}
                 className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
@@ -263,7 +308,7 @@ export default function ComparePage() {
                   <tr>
                     <th className="px-4 py-3 font-medium">SKU</th>
                     <th className="px-4 py-3 font-medium">Description</th>
-                    {vendors.map((vendor) => (
+                    {visibleVendors.map((vendor) => (
                       <th key={vendor.id} className="px-4 py-3 font-medium">
                         <div className="flex items-center gap-2">
                           <span className="truncate text-xs">{vendor.name}</span>
@@ -274,7 +319,7 @@ export default function ComparePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {skus.map((sku) => (
+                  {visibleSkus.map((sku) => (
                     <tr key={sku.id} className="border-t border-slate-200">
                       <td className="px-4 py-3 font-medium text-slate-900">{sku.sku}</td>
                       <td className="px-4 py-3 text-slate-600 text-xs">{sku.description}</td>
@@ -291,6 +336,8 @@ export default function ComparePage() {
                                 onClick={() =>
                                   setSelectedEvidence({
                                     ...cell,
+                                    vendorName: vendor.name,
+                                    sku: sku.sku,
                                     document: cell.sourceDocumentId
                                       ? documentsById[cell.sourceDocumentId] ?? null
                                       : null,
@@ -303,6 +350,7 @@ export default function ComparePage() {
                                 <span className="text-xs text-slate-500">
                                   {cell.status === "VALID" ? "✓" : cell.status === "MISSING" ? "✗" : "?"}
                                 </span>
+                                {showConfidence && <span className="text-[10px] text-slate-400">{cell.confidence === null ? "No confidence" : `${Math.round(cell.confidence * 100)}% confidence`}</span>}
                               </button>
                             ) : (
                               <span className="text-slate-400">—</span>
@@ -332,6 +380,7 @@ export default function ComparePage() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700">Evidence</p>
                 <h2 id="evidence-title" className="mt-2 text-xl font-semibold text-slate-900">Quote provenance</h2>
+                <p className="mt-1 text-sm text-slate-500">{selectedEvidence.vendorName} · {selectedEvidence.sku}</p>
               </div>
               <button type="button" onClick={() => setSelectedEvidence(null)} className="text-sm font-medium text-slate-500 hover:text-slate-900">
                 Close
@@ -355,7 +404,7 @@ export default function ComparePage() {
                 <div><dt className="text-slate-500">Validation</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.status}</dd></div>
                 <div><dt className="text-slate-500">Mapping confidence</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.confidence === null ? "Not recorded" : `${Math.round(selectedEvidence.confidence * 100)}%`}</dd></div>
                 <div><dt className="text-slate-500">Normalization</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.conversionMethod ?? "No conversion method recorded"}{selectedEvidence.conversionRate === null ? "" : ` (${selectedEvidence.conversionRate})`}</dd></div>
-                <div><dt className="text-slate-500">Source document</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.document?.filename ?? (selectedEvidence.sourceDocumentId ?? "Not linked")}</dd></div>
+                <div><dt className="text-slate-500">Source document</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.document?.filename ?? "Not linked"}</dd></div>
                 <div><dt className="text-slate-500">Source reference</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.sourceReference ?? "Not recorded"}</dd></div>
                 {selectedEvidence.conditions ? <div><dt className="text-slate-500">Conditions</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.conditions}</dd></div> : null}
               </dl>

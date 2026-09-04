@@ -152,7 +152,7 @@ export async function processExtractedQuotes(input: {
       currency: (extracted.currency ?? undefined) as string | undefined,
       unit: (extracted.unit ?? undefined) as string | undefined,
       quantity: Number(lineItem.annual_quantity ?? 1),  // Use annual_quantity from line item
-      leadTimeDays: 0,  // Not extracted, default to 0 (within policy)
+      leadTimeDays: extraction.lead_time_days ?? 0,
       mandatorySpecPass: true,  // Assume pass unless flagged in extraction exceptions
     });
 
@@ -237,6 +237,10 @@ export async function processExtractedQuotes(input: {
   const failedCount = processedQuotes.filter((q) => q.validationStatus === "FAILED").length;
   const ambiguousCount = processedQuotes.filter((q) => q.validationStatus === "AMBIGUOUS").length;
   const missingCount = processedQuotes.filter((q) => q.validationStatus === "MISSING").length;
+  if ((extraction.lead_time_days ?? 0) > 14) {
+    qualificationStatus = "FAILED";
+    issues.push({ issueType: "LEAD_TIME", severity: "ERROR", message: `Lead time ${extraction.lead_time_days} days exceeds the 14-day RFx limit` });
+  }
 
   if (failedCount > 0) {
     qualificationStatus = "FAILED";

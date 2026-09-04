@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { RfxContextBar } from "@/components/layout/rfx-context-bar";
+import { recordActivity } from "@/lib/activity-log";
 
 const SUGGESTED_QUESTIONS = [
   {
@@ -40,15 +42,29 @@ const SUGGESTED_QUESTIONS = [
     tool: "recommend_award",
     description: "Review the deterministic award scenario and its risks",
   },
+  { id: "coverage", title: "Which SKUs do not have comparable quotes?", tool: "get_comparison", description: "Find gaps in comparable supplier coverage" },
+  { id: "verify", title: "Which extracted values should I verify?", tool: "get_source_evidence", description: "Surface ambiguous, failed, and missing quote evidence" },
+  { id: "move", title: "Why did you move these SKUs between vendors?", tool: "get_comparison", description: "Inspect the evidence behind price differences" },
+  { id: "prepare", title: "Prepare an award recommendation", tool: "recommend_award", description: "Summarize the deterministic scenario for approval" },
 ];
 
 export default function AskPage() {
+  type ChatMessage = { role: "buyer" | "analyst"; text: string };
   const [rfxId, setRfxId] = useState<string | null>(null);
   const [selectedQuestion, setSelectedQuestion] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
+  const [awardFinalized, setAwardFinalized] = useState(false);
+  const [rfxName, setRfxName] = useState("Selected RFx");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    { role: "analyst", text: "I can compare suppliers, test award scenarios, explain risks, and prepare a recommendation from this RFx." },
+  ]);
+
+  const addLog = (event: string, detail: string, status: "running" | "success" | "error") => {
+    recordActivity("Decide", event, detail, status);
+  };
 
   useEffect(() => {
     const loadRfx = async () => {
@@ -61,10 +77,14 @@ export default function AskPage() {
         }
 
         const supabase = createClient(supabaseUrl, supabaseKey);
-        const { data } = await supabase.from("rfxs").select("*").limit(1);
+        const selectedRfxId = window.localStorage.getItem("aerchain:selected-rfx-id");
+        const { data } = selectedRfxId
+          ? await supabase.from("rfxs").select("*").eq("id", selectedRfxId).maybeSingle()
+          : await supabase.from("rfxs").select("*").limit(1).maybeSingle();
 
-        if (data && data.length > 0) {
-          setRfxId(data[0].id);
+        if (data) {
+          setRfxId(data.id);
+          setRfxName(data.name || "Untitled RFx");
         }
       } catch (err) {
         console.error("Error loading RFx:", err);
@@ -74,7 +94,7 @@ export default function AskPage() {
     loadRfx();
   }, []);
 
-  const runQuestion = async (toolName: string) => {
+  const runQuestion = async (toolName: string, promptText?: string) => {
     if (!rfxId) {
       setError("No RFx loaded");
       return;
@@ -83,6 +103,8 @@ export default function AskPage() {
     setLoading(true);
     setError(null);
     setResult(null);
+    if (promptText) setChatMessages((current) => [...current, { role: "buyer", text: promptText }]);
+    addLog("Analyst API requested", `Tool request: ${toolName}`, "running");
 
     try {
       const res = await fetch("/api/analyst-tool", {
@@ -95,11 +117,19 @@ export default function AskPage() {
 
       if (!data.success) {
         setError(data.error || "Tool execution failed");
+        addLog("Tool failed", data.error || "The analyst tool returned an error.", "error");
+        setChatMessages((current) => [...current, { role: "analyst", text: "I couldn't complete that analysis. Open the System log in the top navigation for technical details." }]);
       } else {
         setResult(data);
+        const provider = data.provenance?.usedProvider ? ` via ${data.provenance.usedProvider}${data.model ? ` (${data.model})` : ""}` : "";
+        addLog("Tool completed", `${data.selectedTool || toolName}${provider}`, "success");
+        setChatMessages((current) => [...current, { role: "analyst", text: data.aiReply || `Analysis complete: ${toolName.replace(/_/g, " ")}. Review the evidence below.` }]);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
+      const message = err instanceof Error ? err.message : "Request failed";
+      setError(message);
+      addLog("Analyst API failed", message, "error");
+      setChatMessages((current) => [...current, { role: "analyst", text: "I couldn't connect to the analyst service. Open the System log in the top navigation for technical details." }]);
     } finally {
       setLoading(false);
     }
@@ -110,78 +140,56 @@ export default function AskPage() {
     setLoading(true);
     setError(null);
     setResult(null);
+    const promptText = question.trim();
+    setChatMessages((current) => [...current, { role: "buyer", text: promptText }]);
+    addLog("AI analyst API requested", `Question: ${promptText}`, "running");
     try {
-      const res = await fetch("/api/analyst-tool", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rfxId, question: question.trim() }) });
+      const res = await fetch("/api/analyst-tool", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rfxId, question: promptText }) });
       const data = await res.json();
-      if (!data.success) setError(data.error || "Question failed"); else setResult(data);
-    } catch (err) { setError(err instanceof Error ? err.message : "Request failed"); }
+      if (!data.success) { setError(data.error || "Question failed"); addLog("AI analyst API failed", data.error || "The analyst API returned an error.", "error"); setChatMessages((current) => [...current, { role: "analyst", text: "I couldn't answer that. Open the System log in the top navigation for technical details." }]); }
+      else { setResult(data); addLog("AI analyst API completed", `${data.selectedTool?.replace(/_/g, " ") || "analysis"}${data.provenance?.usedProvider ? ` via ${data.provenance.usedProvider}` : ""}`, "success"); setChatMessages((current) => [...current, { role: "analyst", text: data.aiReply || `I ran ${data.selectedTool?.replace(/_/g, " ") || "the analysis"}. Review the structured result below.` }]); }
+    } catch (err) { const message = err instanceof Error ? err.message : "Request failed"; setError(message); addLog("AI analyst API failed", message, "error"); setChatMessages((current) => [...current, { role: "analyst", text: "I couldn't connect to the analyst service. Open the System log in the top navigation for technical details." }]); }
     finally { setLoading(false); }
+  };
+
+  const finalizeAward = async () => {
+    if (!rfxId) return;
+    setLoading(true);
+    setError(null);
+    addLog("Award finalization requested", "Running the deterministic award validation.", "running");
+    try {
+      const res = await fetch("/api/analyst-tool", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rfxId, toolName: "finalize_award" }) });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || "Award could not be finalized");
+      setAwardFinalized(true);
+      setResult(data);
+      addLog("Award finalized", "The selected RFx was marked completed.", "success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Award could not be finalized";
+      setError(message);
+      addLog("Award finalization failed", message, "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="space-y-6">
+      <RfxContextBar stage="Decide" />
       {/* Header */}
-      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="text-lg font-semibold">Ask the analyst</h3>
-        <div className="mt-4 flex gap-2">
-          <input value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void askQuestion(); }} placeholder="Ask about savings, risks, vendors, or an award" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm" disabled={loading || !rfxId} />
-          <button onClick={() => void askQuestion()} className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:bg-slate-300" disabled={loading || !rfxId || !question.trim()}>Ask</button>
+      <section className="grid gap-6 lg:h-[calc(100vh-16rem)] lg:min-h-135 lg:grid-cols-[1.15fr_0.85fr]">
+        <div className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50/70 p-5">{chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`flex ${message.role === "buyer" ? "justify-end" : "justify-start"}`}><div className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === "buyer" ? "rounded-br-sm bg-slate-900 text-white" : "rounded-bl-sm border border-slate-200 bg-white text-slate-700 shadow-sm"}`}><p className="mb-1 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">{message.role === "buyer" ? "You" : "Analyst"}</p>{message.text}</div></div>)}{loading && <p className="text-xs font-medium text-slate-500">Analyst is checking the RFx data...</p>}</div>
+          <div className="border-t border-slate-200 p-4"><div className="flex gap-2"><input value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void askQuestion(); }} placeholder="Ask about savings, risks, vendors, or an award" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm" disabled={loading || !rfxId} /><button onClick={() => void askQuestion()} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300" disabled={loading || !rfxId || !question.trim()}>Ask</button></div><p className="mt-2 text-xs text-slate-400">Answers are grounded in deterministic procurement calculations.</p></div>
         </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-700">Ask</p>
-        <h2 className="mt-3 text-2xl font-semibold">Analyst assistant</h2>
-        <p className="mt-2 max-w-2xl text-slate-600">
-          Ask questions about the current RFx. The system will analyze extracted vendor data and
-          provide deterministic, repeatable answers.
-        </p>
-      </section>
-
-      {/* Suggested Questions */}
-      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="text-lg font-semibold">Suggested Questions</h3>
-        <div className="mt-4 space-y-3">
-          {SUGGESTED_QUESTIONS.map((q) => (
-            <button
-              key={q.id}
-              onClick={() => {
-                setSelectedQuestion(q.id);
-                runQuestion(q.tool);
-              }}
-              disabled={loading || !rfxId}
-              className={`w-full text-left rounded-lg border-2 p-4 transition-all ${
-                selectedQuestion === q.id
-                  ? "border-sky-500 bg-sky-50"
-                  : "border-slate-200 hover:border-sky-300 hover:bg-slate-50"
-              } disabled:opacity-50 ${q.id === "killer" ? "border-l-4 border-l-rose-500" : ""}`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  {q.id === "killer" && (
-                    <span className="mb-2 inline-block rounded bg-rose-100 px-2 py-1 text-xs font-semibold text-rose-700">
-                      🔥 KILLER SCENARIO
-                    </span>
-                  )}
-                  <p className="font-medium text-slate-900">{q.title}</p>
-                  <p className="mt-1 text-sm text-slate-600">{q.description}</p>
-                </div>
-                {selectedQuestion === q.id && loading && (
-                  <div className="ml-4 text-sky-600">
-                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-sky-300 border-r-sky-600" />
-                  </div>
-                )}
-              </div>
-            </button>
-          ))}
-        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-900 p-5 text-white"><p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">Decision desk</p><h3 className="mt-2 text-xl font-semibold">Move from evidence to award</h3><p className="mt-2 text-sm leading-6 text-slate-300">Run the scenario first, review exceptions, then ask for a recommendation before finalizing.</p><div className="mt-6 space-y-2">{SUGGESTED_QUESTIONS.slice(0, 4).map((q) => <button key={q.id} onClick={() => { setSelectedQuestion(q.id); void runQuestion(q.tool, q.title); }} disabled={loading || !rfxId} className="w-full rounded-xl border border-slate-700 px-3 py-3 text-left text-sm text-slate-200 hover:border-emerald-400 hover:bg-slate-800 disabled:opacity-50"><span className="block font-semibold">{q.title}</span><span className="mt-1 block text-xs text-slate-400">{q.description}</span></button>)}</div><div className="mt-5 border-t border-slate-700 pt-4"><p className="text-xs uppercase tracking-[0.14em] text-slate-400">Award status</p><p className="mt-2 text-sm font-semibold text-amber-300">{awardFinalized ? "Finalized" : "Awaiting buyer decision"}</p></div></div>
       </section>
 
       {/* Result Display */}
       {error && (
         <section className="rounded-2xl border-2 border-rose-200 bg-rose-50 p-6">
           <p className="font-medium text-rose-900">Error</p>
-          <p className="mt-2 text-rose-800">{error}</p>
+          <p className="mt-2 text-rose-800">The analysis could not be completed. Open the System log in the top navigation for technical details.</p>
         </section>
       )}
 
@@ -288,8 +296,11 @@ export default function AskPage() {
             <p className="mt-2 text-sm text-slate-800">{result.data?.recommendation?.summary}</p>
           </div>
           {result.data?.recommendation?.risks?.length > 0 && <div className="mt-4"><h4 className="font-semibold">Risks to resolve</h4><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">{result.data.recommendation.risks.map((risk: string) => <li key={risk}>{risk}</li>)}</ul></div>}
+          <button onClick={() => void finalizeAward()} disabled={loading || awardFinalized || !result.data?.recommendation?.recommend} className="mt-5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300">{awardFinalized ? "Award finalized" : "Finalize award"}</button>
         </section>
       )}
+
+      {result && result.toolName === "finalize_award" && <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6"><p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">Award complete</p><h3 className="mt-2 text-lg font-semibold text-emerald-950">Selected RFx awarded to eligible vendors</h3><p className="mt-2 text-sm text-emerald-900">{result.data?.message}</p></section>}
 
       {result && result.toolName === "get_vendor_qualification" && (
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -417,11 +428,11 @@ export default function AskPage() {
               <tbody>
                 {(result.data || []).slice(0, 10).map((row: any, i: number) => (
                   <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
-                    <td className="px-4 py-2">{row.lineItemId.slice(0, 8)}...</td>
+                    <td className="px-4 py-2 font-medium">{row.sku || "Unknown SKU"}</td>
                     <td className="px-4 py-2 font-semibold">
                       ₹{(row.bestPrice || 0).toLocaleString("en-IN")}
                     </td>
-                    <td className="px-4 py-2 text-slate-600">{row.allVendors.length}</td>
+                    <td className="px-4 py-2 text-slate-600"><span className="font-medium text-slate-900">{row.bestVendorName || "Unknown vendor"}</span><span className="block text-xs text-slate-500">{row.vendorNames?.join(", ") || `${row.allVendors?.length || 0} vendors`}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -429,6 +440,8 @@ export default function AskPage() {
           </div>
         </section>
       )}
+
+      {result && result.toolName === "get_source_evidence" && <section className="rounded-2xl border border-amber-200 bg-amber-50 p-6"><h3 className="text-lg font-semibold text-amber-950">Values to verify</h3><p className="mt-2 text-sm text-amber-900">These records need buyer attention before relying on them in an award.</p><div className="mt-4 space-y-2">{(result.data || []).slice(0, 10).map((item: any) => <div key={item.id} className="rounded-lg border border-amber-200 bg-white p-3 text-sm"><div className="flex justify-between gap-3"><span className="font-semibold text-slate-900">{item.vendor_name} · {item.sku}</span><span className="text-xs font-semibold text-amber-700">{item.validation_status}</span></div><p className="mt-1 text-slate-700">{item.raw_currency || ""} {item.raw_price ?? "No price"} / {item.raw_unit || "unit"}</p><p className="mt-1 text-xs text-slate-500">{item.document_name || "No source document"} · {item.source_reference || "Source reference not recorded"}</p></div>)}</div></section>}
     </div>
   );
 }

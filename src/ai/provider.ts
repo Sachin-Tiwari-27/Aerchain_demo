@@ -53,12 +53,13 @@ function getEnv() {
     openRouterRfxPrimaryModel: process.env.OPENROUTER_RFX_PRIMARY_MODEL ?? "",
     openRouterRfxSecondaryModel: process.env.OPENROUTER_RFX_SECONDARY_MODEL ?? "",
     // RFx drafting (conversational buyer message -> RFx description/category)
-    geminiRfxDraftPrimaryModel: process.env.GEMINI_RFX_DRAFT_PRIMARY_MODEL ?? "",
-    geminiRfxDraftSecondaryModel: process.env.GEMINI_RFX_DRAFT_SECONDARY_MODEL ?? "",
-    openRouterRfxDraftPrimaryModel: process.env.OPENROUTER_RFX_DRAFT_PRIMARY_MODEL ?? "",
+    geminiRfxDraftPrimaryModel: process.env.GEMINI_RFX_DRAFT_PRIMARY_MODEL ?? "gemini-3.5-flash",
+    geminiRfxDraftSecondaryModel: process.env.GEMINI_RFX_DRAFT_SECONDARY_MODEL ?? "gemini-3.5-flash-lite",
+    openRouterRfxDraftPrimaryModel: process.env.OPENROUTER_RFX_DRAFT_PRIMARY_MODEL ?? "minimax/minimax-m3:free",
     // Analyst intent routing (question -> tool name)
-    geminiAnalystIntentPrimaryModel: process.env.GEMINI_ANALYST_INTENT_PRIMARY_MODEL ?? "",
-    geminiAnalystIntentSecondaryModel: process.env.GEMINI_ANALYST_INTENT_SECONDARY_MODEL ?? "",
+    geminiAnalystIntentPrimaryModel: process.env.GEMINI_ANALYST_INTENT_PRIMARY_MODEL || "gemini-3.5-flash-lite",
+    geminiAnalystIntentSecondaryModel: process.env.GEMINI_ANALYST_INTENT_SECONDARY_MODEL || "gemini-3.5-flash-lite",
+    openRouterAnalystIntentPrimaryModel: process.env.OPENROUTER_ANALYST_INTENT_PRIMARY_MODEL || process.env.OPENROUTER_RFX_DRAFT_PRIMARY_MODEL || "minimax/minimax-m3:free",
     // Analyst recommendation (award narrative)
     geminiAnalystRecommendationPrimaryModel:
       process.env.GEMINI_ANALYST_RECOMMENDATION_PRIMARY_MODEL ?? "",
@@ -75,14 +76,18 @@ function getProviderChain(useCase: UseCase): ProviderName[] {
   // Procurement-signal use-cases: Gemini only (primary -> secondary).
   // Never fall back to OpenRouter for these to preserve extraction quality
   // and keep buyer-facing procurement logic on a single vendor.
-  const geminiOnlyUseCases: UseCase[] = [
-    "rfx-json",
-    "analyst-intent",
-    "analyst-recommendation",
-  ];
+  const geminiOnlyUseCases: UseCase[] = ["rfx-json", "analyst-recommendation"];
 
   if (geminiOnlyUseCases.includes(useCase)) {
     return hasGoogle ? ["gemini-primary", "gemini-secondary"] : [];
+  }
+
+  if (useCase === "analyst-intent") {
+    const chain: ProviderName[] = [];
+    if (hasGoogle && env.geminiAnalystIntentPrimaryModel) chain.push("gemini-primary");
+    if (hasGoogle && env.geminiAnalystIntentSecondaryModel) chain.push("gemini-secondary");
+    if (hasOpenRouter && env.openRouterAnalystIntentPrimaryModel) chain.push("openrouter-primary");
+    return chain;
   }
 
   // rfx-draft is conversational and has its own chain:
@@ -158,9 +163,9 @@ function getModel(provider: ProviderName, useCase: UseCase): string {
         case "gemini-secondary":
           return env.geminiAnalystIntentSecondaryModel;
         case "openrouter-primary":
-          return env.openRouterRfxPrimaryModel;
+          return env.openRouterAnalystIntentPrimaryModel;
         case "openrouter-secondary":
-          return env.openRouterRfxSecondaryModel;
+          return env.openRouterAnalystIntentPrimaryModel;
       }
       break;
     case "analyst-recommendation":
