@@ -12,6 +12,13 @@ interface Vendor {
   id: string;
   name: string;
   status: "QUALIFIED" | "QUALIFIED_WITH_EXCEPTIONS" | "REVIEW" | "FAILED";
+  reasons: string[];
+  quoteCount: number;
+  mappedCount: number;
+  validCount: number;
+  missingCount: number;
+  ambiguousCount: number;
+  averageConfidence: number | null;
 }
 
 interface SKU {
@@ -95,6 +102,7 @@ export default function ComparePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceQuote | null>(null);
+  const [selectedVendor, setSelectedVendor] = useState<Vendor | null>(null);
   const [infoKey, setInfoKey] = useState<CompareInfoKey | null>(null);
   const [rfxName, setRfxName] = useState("Selected RFx");
   const [qualifiedOnly, setQualifiedOnly] = useState(false);
@@ -134,24 +142,20 @@ export default function ComparePage() {
         const { data: vendorData } = await supabase.from("vendors").select("*");
         const { data: responseData } = await supabase
           .from("vendor_responses")
-          .select("id, vendor_id, status, raw_extraction")
+          .select("id, vendor_id, status, qualification_reasons, raw_extraction")
           .eq("rfx_id", rfxId);
 
-        const responseByVendor: Record<string, string> = {};
+        const responseByVendor: Record<string, { status: string; reasons: string[] }> = {};
         const responseById: Record<string, { rawExtraction: Record<string, unknown> | null }> = {};
         responseData?.forEach((r) => {
-          responseByVendor[r.vendor_id] = r.status || "REVIEW";
+          responseByVendor[r.vendor_id] = {
+            status: r.status || "REVIEW",
+            reasons: Array.isArray(r.qualification_reasons) ? r.qualification_reasons.filter((reason: unknown): reason is string => typeof reason === "string") : [],
+          };
           responseById[r.id] = {
             rawExtraction: r.raw_extraction as Record<string, unknown> | null,
           };
         });
-
-        const vendorList: Vendor[] = (vendorData || []).map((v) => ({
-          id: v.id,
-          name: v.name,
-          status: (responseByVendor[v.id] || "REVIEW") as "QUALIFIED" | "QUALIFIED_WITH_EXCEPTIONS" | "REVIEW" | "FAILED",
-        }));
-        setVendors(vendorList);
 
         // Fetch line items (SKUs)
         const { data: lineItems } = await supabase
@@ -222,6 +226,32 @@ export default function ComparePage() {
             status: q.validation_status || "UNKNOWN",
           };
         });
+
+        const vendorList: Vendor[] = (vendorData || []).map((v) => {
+          const vendorQuotes = (quotes || []).filter((quote) => quote.vendor_id === v.id);
+          const mappedQuotes = vendorQuotes.filter((quote) => quote.mapping_status === "MAPPED");
+          const validQuotes = vendorQuotes.filter((quote) => quote.validation_status === "VALID");
+          const missingQuotes = vendorQuotes.filter((quote) => quote.validation_status === "MISSING");
+          const ambiguousQuotes = vendorQuotes.filter((quote) => quote.validation_status === "AMBIGUOUS");
+          const confidenceValues = vendorQuotes
+            .map((quote) => typeof quote.confidence === "number" ? quote.confidence : null)
+            .filter((confidence): confidence is number => confidence !== null);
+          return {
+            id: v.id,
+            name: v.name,
+            status: (responseByVendor[v.id]?.status || "REVIEW") as Vendor["status"],
+            reasons: responseByVendor[v.id]?.reasons || [],
+            quoteCount: vendorQuotes.length,
+            mappedCount: mappedQuotes.length,
+            validCount: validQuotes.length,
+            missingCount: missingQuotes.length,
+            ambiguousCount: ambiguousQuotes.length,
+            averageConfidence: confidenceValues.length > 0
+              ? confidenceValues.reduce((sum, confidence) => sum + confidence, 0) / confidenceValues.length
+              : null,
+          };
+        });
+        setVendors(vendorList);
 
         setPriceMatrix(matrix);
         recordActivity("Compare", "Data refresh completed", `${quotes?.length ?? 0} extracted quotes loaded`, "success");
@@ -319,9 +349,10 @@ export default function ComparePage() {
               >
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-sm font-medium text-slate-600">{vendor.name}</p>
-                  <span className={["rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]", getStatusBadgeColor(vendor.status)].join(" ")}>
-                    {vendor.status.replace(/_/g, " ")}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className={["rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]", getStatusBadgeColor(vendor.status)].join(" ")}>{vendor.status.replace(/_/g, " ")}</span>
+                    <InfoButton label={`Explain ${vendor.name} status and mapping`} onClick={() => setSelectedVendor(vendor)} />
+                  </div>
                 </div>
               </div>
             ))}
@@ -375,7 +406,6 @@ export default function ComparePage() {
                                 <span className="font-semibold">{formatPrice(cell.price)}</span>
                                 <span className="flex items-center gap-1 text-xs text-slate-500">
                                   <span>{cell.status}</span>
-                                  <InfoButton label="Explain quote validation status" onClick={() => setInfoKey("validation-status")} />
                                 </span>
                                 {showConfidence && <span className="text-[10px] text-slate-400">{cell.confidence === null ? "No confidence" : `${Math.round(cell.confidence * 100)}% confidence`}</span>}
                               </button>
@@ -393,6 +423,36 @@ export default function ComparePage() {
           </section>
         </>
       )}
+
+      <Drawer
+        open={Boolean(selectedVendor)}
+        onClose={() => setSelectedVendor(null)}
+        eyebrow="Supplier evidence"
+        title={selectedVendor?.name ?? "Vendor details"}
+        subtitle={selectedVendor ? selectedVendor.status.replace(/_/g, " ") : undefined}
+      >
+        {selectedVendor && (
+          <div className="space-y-5">
+            <dl className="grid gap-4 text-sm">
+              <div><dt className="text-slate-500">Qualification status</dt><dd className="mt-1 font-medium text-slate-900">{selectedVendor.status.replace(/_/g, " ")}</dd></div>
+              <div><dt className="text-slate-500">Quote coverage</dt><dd className="mt-1 font-medium text-slate-900">{selectedVendor.quoteCount} quote rows processed</dd></div>
+              <div><dt className="text-slate-500">Mapping</dt><dd className="mt-1 font-medium text-slate-900">{selectedVendor.mappedCount} mapped, {selectedVendor.quoteCount - selectedVendor.mappedCount} unmapped</dd></div>
+              <div><dt className="text-slate-500">Validation</dt><dd className="mt-1 font-medium text-slate-900">{selectedVendor.validCount} valid, {selectedVendor.ambiguousCount} ambiguous, {selectedVendor.missingCount} missing</dd></div>
+              <div><dt className="text-slate-500">Average mapping confidence</dt><dd className="mt-1 font-medium text-slate-900">{selectedVendor.averageConfidence === null ? "Not recorded" : `${Math.round(selectedVendor.averageConfidence * 100)}%`}</dd></div>
+            </dl>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Why this status</p>
+              {selectedVendor.reasons.length > 0 ? (
+                <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-700">
+                  {selectedVendor.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-slate-600">No qualification exceptions were recorded.</p>
+              )}
+            </div>
+          </div>
+        )}
+      </Drawer>
 
       <Drawer
         open={Boolean(selectedEvidence)}

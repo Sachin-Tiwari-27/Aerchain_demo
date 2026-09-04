@@ -43,6 +43,39 @@ function resolveAnalystTool(value: string, question: string): AnalystToolName {
   return fallbackAnalystTool(question);
 }
 
+function narrativeContext(toolName: string, data: unknown) {
+  if (!data || typeof data !== "object") return data;
+  const record = data as Record<string, unknown>;
+  if (toolName === "run_award_scenario") {
+    const summary = record.summary as Record<string, unknown> | undefined;
+    return {
+      summary,
+      excludedSkus: record.excludedSkus,
+      awardedVendors: Array.from(
+        new Set(
+          Object.values((record.award ?? {}) as Record<string, { vendorName?: string }>)
+            .map((award) => award.vendorName)
+            .filter(Boolean),
+        ),
+      ),
+    };
+  }
+  return record;
+}
+
+function fallbackNarrative(question: string, toolName: string, data: unknown) {
+  const normalizedQuestion = question.toLowerCase();
+  const context = narrativeContext(toolName, data) as Record<string, unknown> | undefined;
+  const summary = context?.summary as Record<string, unknown> | undefined;
+  const vendorsUsed = summary?.vendorsUsed;
+  if (/single[- ]source|single vendor|one vendor/.test(normalizedQuestion) && typeof vendorsUsed === "number") {
+    return vendorsUsed === 1
+      ? "Yes. The current award scenario uses a single vendor across the awarded items."
+      : `No. The current award scenario uses ${vendorsUsed} vendors, so it is not a single-source award.`;
+  }
+  return `I ran ${toolName.replace(/_/g, " ")} for this RFx. The structured result is available below with the supporting details.`;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -226,15 +259,16 @@ export async function POST(req: NextRequest) {
       try {
         const response = await generateStructured({
           schema: z.object({ reply: z.string().min(1) }),
-          prompt: `Answer the buyer's question using only the deterministic tool result below. Explain the result clearly and concisely, state a direct yes/no conclusion when the question asks whether something is feasible, mention important exceptions or missing data, and do not invent, recalculate, or change any numbers. The structured result card is also shown to the buyer, so focus on the conclusion and the reasons behind it. Buyer question: ${question}\n\nTool used: ${resolvedToolName}\n\nTool result JSON: ${JSON.stringify(completedResult.data)}`,
+          prompt: `You are the procurement analyst answering the buyer directly. Use only the deterministic facts below. Start with the direct answer to the buyer's question. If the question asks whether something is feasible, answer Yes or No explicitly and explain why in one or two sentences. Mention the relevant vendors, constraints, exclusions, or missing baseline. Do not say that the result is "below" as your answer, do not ask the buyer to inspect a card, and do not invent or recalculate any numbers. Buyer question: ${question}\n\nTool used: ${resolvedToolName}\n\nDeterministic facts: ${JSON.stringify(narrativeContext(resolvedToolName, completedResult.data))}`,
           useCase: "analyst-recommendation",
           documentKind: "text-derived",
         });
         aiReply = response.data.reply;
         provenance = response.provenance;
         model = response.model;
-      } catch {
-        aiReply = `The deterministic result shows ${resolvedToolName.replace(/_/g, " ")}. Review the structured result below for the supporting details.`;
+      } catch (error) {
+        console.warn("Analyst narrative generation failed; using deterministic fallback", error);
+        aiReply = fallbackNarrative(question, resolvedToolName, completedResult.data);
       }
     }
 
