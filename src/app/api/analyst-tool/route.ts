@@ -198,10 +198,23 @@ export async function POST(req: NextRequest) {
           .in("validation_status", ["AMBIGUOUS", "FAILED", "MISSING"])
           .limit(50);
         if (quoteError) throw new Error(quoteError.message);
+        const vendorIds = [...new Set((quotes ?? []).map((quote) => quote.vendor_id))];
+        const lineItemIds = [...new Set((quotes ?? []).map((quote) => quote.line_item_id))];
+        const documentIds = [...new Set(
+          (quotes ?? [])
+            .map((quote) => quote.source_document_id)
+            .filter((documentId): documentId is string => Boolean(documentId)),
+        )];
         const [{ data: vendors }, { data: lineItems }, { data: documents }] = await Promise.all([
-          supabase!.from("vendors").select("id, name"),
-          supabase!.from("rfx_line_items").select("id, sku"),
-          supabase!.from("vendor_documents").select("id, filename"),
+          vendorIds.length
+            ? supabase!.from("vendors").select("id, name").in("id", vendorIds)
+            : Promise.resolve({ data: [] }),
+          lineItemIds.length
+            ? supabase!.from("rfx_line_items").select("id, sku").eq("rfx_id", rfxId).in("id", lineItemIds)
+            : Promise.resolve({ data: [] }),
+          documentIds.length
+            ? supabase!.from("vendor_documents").select("id, filename").eq("rfx_id", rfxId).in("id", documentIds)
+            : Promise.resolve({ data: [] }),
         ]);
         const vendorNames = Object.fromEntries((vendors ?? []).map((vendor) => [vendor.id, vendor.name]));
         const skuNames = Object.fromEntries((lineItems ?? []).map((lineItem) => [lineItem.id, lineItem.sku]));
