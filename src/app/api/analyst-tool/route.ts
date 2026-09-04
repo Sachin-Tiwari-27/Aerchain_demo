@@ -90,17 +90,14 @@ export async function POST(req: NextRequest) {
         schema: z.object({
           toolName: z.string().optional(),
           tool: z.string().optional(),
-          reply: z.string().optional().default(""),
         }).transform((value) => ({
           toolName: value.toolName || value.tool || "",
-          reply: value.reply,
         })),
-        prompt: `Select exactly one deterministic procurement tool for this buyer question. Never calculate or invent numbers. Use recommend_award for whether to recommend an award, run_award_scenario for split/cheapest/award questions, calculate_savings for spend/savings, get_vendor_qualification for vendor clearance, get_risk_summary for risks, get_source_evidence for values that need verification or provenance, and get_comparison for price comparisons. Question: ${question}`,
+        prompt: `Select the best deterministic procurement tool for this buyer question. Return only the tool name. Use recommend_award for award recommendations, run_award_scenario for hypothetical or split/cheapest/award scenarios, calculate_savings for spend/savings, get_vendor_qualification for vendor clearance, get_risk_summary for risks, get_source_evidence for verification/provenance, and get_comparison for price comparisons. For questions outside these categories, choose the closest source of RFx data so the analyst can answer from structured context. Question: ${question}`,
         useCase: "analyst-intent",
         documentKind: "text-derived",
       });
       resolvedToolName = resolveAnalystTool(interpretation.data.toolName, question);
-      aiReply = interpretation.data.reply;
       provenance = interpretation.provenance;
       model = interpretation.model;
     }
@@ -258,8 +255,19 @@ export async function POST(req: NextRequest) {
     if (typeof question === "string" && question.trim() && completedResult.success) {
       try {
         const response = await generateStructured({
-          schema: z.object({ reply: z.string().min(1) }),
-          prompt: `You are the procurement analyst answering the buyer directly. Use only the deterministic facts below. Start with the direct answer to the buyer's question. If the question asks whether something is feasible, answer Yes or No explicitly and explain why in one or two sentences. Mention the relevant vendors, constraints, exclusions, or missing baseline. Do not say that the result is "below" as your answer, do not ask the buyer to inspect a card, and do not invent or recalculate any numbers. Buyer question: ${question}\n\nTool used: ${resolvedToolName}\n\nDeterministic facts: ${JSON.stringify(narrativeContext(resolvedToolName, completedResult.data))}`,
+          schema: z.object({
+            reply: z.string().optional(),
+            answer: z.string().optional(),
+            response: z.string().optional(),
+            message: z.string().optional(),
+            text: z.string().optional(),
+          }).transform((value) => ({
+            reply: value.reply || value.answer || value.response || value.message || value.text || "",
+          })).refine((value) => value.reply.trim().length > 0, {
+            message: "The analyst response must contain text in reply, answer, response, message, or text.",
+          }),
+          prompt: `You are the procurement analyst answering the buyer directly. Use only the deterministic facts below. Return only valid JSON in exactly this shape: {"reply":"your concise answer"}. Start with the direct answer to the buyer's question. If the question asks whether something is feasible, answer Yes or No explicitly and explain why in one or two sentences. Mention the relevant vendors, constraints, exclusions, or missing baseline. Do not say that the result is "below" as your answer, do not ask the buyer to inspect a card, and do not invent or recalculate any numbers. Buyer question: ${question}\n\nTool used: ${resolvedToolName}\n\nDeterministic facts: ${JSON.stringify(narrativeContext(resolvedToolName, completedResult.data))}`,
+          onInvalid: () => `Return only valid JSON with a non-empty string field named reply, for example: {"reply":"The direct answer."}. Answer this buyer question using only the deterministic facts already provided. Buyer question: ${question}\n\nDeterministic facts: ${JSON.stringify(narrativeContext(resolvedToolName, completedResult.data))}`,
           useCase: "analyst-recommendation",
           documentKind: "text-derived",
         });
