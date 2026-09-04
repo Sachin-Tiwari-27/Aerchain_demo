@@ -302,16 +302,16 @@ export async function loadFullCatalogForDemo(supabase: any, rfxId?: string | nul
     return { success: true, data: { lineItems: existingItems, rfx: state.data?.rfx, message: "Catalog already loaded" } };
   }
 
-  const insertedItems = [] as any[];
+  const insertedLineItems = [] as any[];
   for (const item of SKU_CATALOG) {
     const result = await addCatalogItemToRfx(supabase, resolvedId, item.sku, {}, "BUYER_CONFIRMED");
-    insertedItems.push(result.data);
+    insertedLineItems.push(result.data);
   }
 
   const existingRequirements = state.data?.requirements ?? [];
   if (existingRequirements.length === 0) {
     for (const requirement of RFX_TEMPLATE_REQUIREMENTS) {
-      const { data } = await supabase
+      await supabase
         .from("rfx_requirements")
         .insert({
           rfx_id: resolvedId,
@@ -323,7 +323,6 @@ export async function loadFullCatalogForDemo(supabase: any, rfxId?: string | nul
           confidence: requirement.confidence,
         })
         .select();
-      insertedItems.push(data?.[0] ?? null);
     }
   }
 
@@ -336,7 +335,7 @@ export async function loadFullCatalogForDemo(supabase: any, rfxId?: string | nul
   return {
     success: true,
     data: {
-      lineItems: insertedItems.filter(Boolean),
+      lineItems: insertedLineItems.filter(Boolean),
       rfx: updatedRfx.data,
       message: "Full demo catalog loaded",
     },
