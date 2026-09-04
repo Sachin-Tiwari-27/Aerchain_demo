@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { generateStructured } from "@/ai/provider";
+import {
+  generateStructured,
+  StructuredGenerationError,
+  vendorExtractionRepairPrompt,
+} from "@/ai/provider";
 import { vendorQuoteExtractionSchema } from "@/ai/extraction";
 import { supabase } from "@/lib/supabase";
 import { processExtractedQuotes, saveProcessedQuotes } from "@/procurement/extraction-pipeline";
@@ -38,6 +42,7 @@ export async function POST(req: Request) {
       media: input.mediaBase64 && input.mediaType
         ? { mimeType: input.mediaType, data: input.mediaBase64 }
         : undefined,
+      onInvalid: () => vendorExtractionRepairPrompt(prompt),
     });
 
     // Store the extraction in vendor_responses
@@ -121,14 +126,17 @@ export async function POST(req: Request) {
         provider: result.provider,
         model: result.model,
         fallbackAttempts: result.fallbackAttempts,
+        diagnostics: result.diagnostics,
       },
     });
   } catch (error) {
-    console.error("Extraction error:", error);
+    const diagnostics = error instanceof StructuredGenerationError ? error.diagnostics : undefined;
+    console.error("Extraction error:", { error, diagnostics });
     return Response.json(
       {
         success: false,
         error: error instanceof Error ? error.message : "Extraction failed",
+        diagnostics,
       },
       { status: 500 },
     );

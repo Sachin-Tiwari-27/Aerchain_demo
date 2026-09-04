@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { generateStructured, type DocumentKind, type UseCase } from "@/ai/provider";
+import {
+  generateStructured,
+  type DocumentKind,
+  type UseCase,
+  vendorExtractionRepairPrompt,
+} from "@/ai/provider";
 
 const supplierShape = z.union([
   z.string(),
@@ -165,6 +170,7 @@ ${input.contentText || (input.imageBase64 ? "The document is attached as binary 
     media: input.imageBase64 && input.mediaType
       ? { mimeType: input.mediaType, data: input.imageBase64 }
       : undefined,
+    onInvalid: () => vendorExtractionRepairPrompt(prompt),
   });
 
   // Fallback: if vendor is null or empty, try to extract from document content
