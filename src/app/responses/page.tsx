@@ -148,6 +148,14 @@ export default function ResponsesPage() {
 
     try {
       const vendor = vendors[doc.vendor_id];
+      const storedDocumentKind = doc.metadata?.documentKind;
+      const documentKind = storedDocumentKind === "image" || storedDocumentKind === "pdf" || storedDocumentKind === "text-derived"
+        ? storedDocumentKind
+        : doc.file_type === "application/pdf" || doc.filename.toLowerCase().endsWith(".pdf")
+          ? "pdf"
+          : doc.file_type?.startsWith("image/")
+            ? "image"
+            : "text-derived";
       const response = await fetch("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -158,7 +166,7 @@ export default function ResponsesPage() {
           contentText: doc.extracted_text || "",
           mediaBase64: typeof doc.metadata?.mediaBase64 === "string" ? doc.metadata.mediaBase64 : undefined,
           mediaType: doc.file_type,
-          documentKind: doc.file_type === "application/pdf" ? "pdf" : doc.file_type?.startsWith("image/") ? "image" : "text-derived",
+          documentKind,
           fileName: doc.filename,
         }),
       });

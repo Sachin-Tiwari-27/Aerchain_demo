@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import { prepareDocument } from "@/procurement/document-preparation";
+import { getDocumentKind, prepareDocument, type PreparedDocumentKind } from "@/procurement/document-preparation";
 
 const BULK_EXTRACTION_DELAY_MS = Number(process.env.BULK_EXTRACTION_DELAY_MS ?? 2500);
 
@@ -258,7 +258,7 @@ async function uploadSingle({
         uploadedVia,
         size: prepared.originalSize,
         documentKind: prepared.documentKind,
-        mediaBase64: prepared.mediaBase64,
+        ...(prepared.mediaBase64 ? { mediaBase64: prepared.mediaBase64 } : {}),
       },
     })
     .select("*")
@@ -277,6 +277,10 @@ async function runExtraction({
   rfxId: string;
 }) {
   if (!document?.id) throw new Error("Cannot extract: missing document id");
+  const storedDocumentKind = document.metadata?.documentKind;
+  const documentKind: PreparedDocumentKind = storedDocumentKind === "image" || storedDocumentKind === "pdf" || storedDocumentKind === "text-derived"
+    ? storedDocumentKind
+    : getDocumentKind(document.filename, document.file_type);
   const origin = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const response = await fetch(`${origin}/api/extract`, {
     method: "POST",
@@ -288,7 +292,7 @@ async function runExtraction({
       contentText: document.extracted_text ?? "",
       mediaBase64: typeof document.metadata?.mediaBase64 === "string" ? document.metadata.mediaBase64 : undefined,
       mediaType: document.file_type,
-      documentKind: document.file_type === "application/pdf" ? "pdf" : document.file_type?.startsWith("image/") ? "image" : "text-derived",
+      documentKind,
       fileName: document.filename,
     }),
   });

@@ -37,6 +37,10 @@ export async function prepareDocument(file: File): Promise<PreparedDocument> {
   }
 
   const extension = file.name.toLowerCase().split(".").pop() ?? "";
+  if (extension === "doc") {
+    throw new Error("Legacy .doc files are not supported. Upload a .docx or PDF instead.");
+  }
+
   if (extension === "docx" || mediaType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
     const result = await mammoth.extractRawText({ buffer: Buffer.from(bytes) });
     return { documentKind, mediaType, contentText: result.value, originalSize: file.size };
@@ -52,7 +56,6 @@ export async function prepareDocument(file: File): Promise<PreparedDocument> {
       documentKind,
       mediaType,
       contentText,
-      mediaBase64: Buffer.from(bytes).toString("base64"),
       originalSize: file.size,
     };
   }
