@@ -59,6 +59,7 @@ export const vendorQuoteExtractionSchema = z.object({
       price: z.number().nullable().optional(),
       unit: z.string().nullable().optional(),
       currency: z.string().nullable().optional(),
+      piece_mass_kg: z.number().positive().nullable().optional(),
       moq: z.number().nullable().optional(),
       moq_unit: z.string().nullable().optional(),
       // Specifications explicitly stated by the vendor for this quoted line.
@@ -158,6 +159,7 @@ CRITICAL REQUIREMENTS:
    - price: The unit price as a number (e.g., 8.50). Use null if missing, a range, an approximation, conditional, or a prior-year reference.
    - unit: The unit of measurement (e.g., "piece", "kg", "meter"). Required.
    - currency: The currency code (e.g., "INR", "USD", "EUR"). Required.
+   - piece_mass_kg: The explicitly documented mass of one finished piece in kilograms. Use null unless the document states a trustworthy per-piece mass. This is required to compare a kg-priced quote with a per-piece RFx.
    - moq: Minimum order quantity as a number (e.g., 5000). Use null if not stated.
    - ply: The vendor-stated board ply count as a number (e.g., 5). Use null if not stated.
    - gsm: The vendor-stated grammage in GSM as a number (e.g., 180). Use null if not stated.
@@ -169,7 +171,7 @@ Rules for extraction:
 - Return a single JSON object at the top level. Do not return an array.
 - The object must contain exactly these keys: vendor, lead_time_days, quotes, questionnaire_answers, commercial_terms, exceptions.
 - Distinguish explicit, derived, ambiguous, and missing prices using price_type. A price range shared by multiple products is ambiguous for every product; do not allocate or average it. Do not turn a rebate, freight charge, or other commercial term into a SKU price.
-- Preserve the quoted unit basis exactly, including quantities such as "100 pcs" and mass units such as "kg". Do not invent a mass-per-piece basis.
+- Preserve the quoted unit basis exactly, including quantities such as "100 pcs" and mass units such as "kg". Set piece_mass_kg only when the document explicitly states the mass per finished piece; never estimate or derive it.
 - Do not map a vague description to an RFx SKU when multiple items could match; retain it as an unmapped exception instead.
 - Only provide lead_time_days for an explicit, unqualified day count. Phrases such as "around two weeks" or "within the RFx range" must produce null and an exception.
 - Keep only seller-supplied values; do not invent SKU codes or descriptions.

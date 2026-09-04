@@ -149,6 +149,7 @@ export function mapQuotesToLineItems(
     price?: number | null;
     unit?: string | null;
     currency?: string | null;
+    piece_mass_kg?: number | null;
     moq?: number | null;
     moq_unit?: string | null;
     confidence?: number | null;
@@ -318,6 +319,7 @@ export async function processExtractedQuotes(input: {
         targetUnit,
         targetCurrency,
         unitFactor: unitInfo?.factor,
+        pieceMassKg: extracted.piece_mass_kg ?? undefined,
       });
       normalizedPrice = (normalized.normalizedPrice ?? null) as number | null;
       normalizedUnit = (normalized.normalizedUnit ?? null) as string | null;

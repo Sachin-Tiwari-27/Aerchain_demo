@@ -1,20 +1,24 @@
 export type CurrencyCode = "USD" | "EUR" | "GBP" | "INR" | "CAD" | "JPY";
 export type UnitCode = "pcs" | "kg" | "lb" | "mm" | "in" | "m" | "cm" | "g";
 
+const FX_RATES_TO_USD: Record<CurrencyCode, number> = {
+  USD: 1,
+  EUR: 0.92,
+  GBP: 0.79,
+  INR: 83.4,
+  CAD: 1.36,
+  JPY: 157.5,
+};
+
+export function isSupportedCurrency(value: string): value is CurrencyCode {
+  return value in FX_RATES_TO_USD;
+}
+
 export function normalizeCurrency(price: number, from: CurrencyCode, to: CurrencyCode): number {
   if (from === to) return Number(price.toFixed(2));
 
-  const fx: Record<CurrencyCode, number> = {
-    USD: 1,
-    EUR: 0.92,
-    GBP: 0.79,
-    INR: 83.4,
-    CAD: 1.36,
-    JPY: 157.5,
-  };
-
-  const usdValue = price / fx[from];
-  return Number((usdValue * fx[to]).toFixed(2));
+  const usdValue = price / FX_RATES_TO_USD[from];
+  return Number((usdValue * FX_RATES_TO_USD[to]).toFixed(2));
 }
 
 export function normalizeUnit(value: number, from: UnitCode, to: UnitCode): number {
@@ -117,8 +121,8 @@ export function normalizeExtractedQuote(input: {
   conversionBasis?: string;
   reason?: string;
 } {
-  const targetCurrency = (input.targetCurrency ?? input.currency ?? "INR").toUpperCase() as CurrencyCode;
-  const targetUnit = (input.targetUnit ?? input.unit ?? "pcs").toLowerCase();
+  const targetCurrency = (input.targetCurrency ?? input.currency ?? "INR").toUpperCase();
+  const targetUnit = canonicalUnit(input.targetUnit ?? input.unit ?? "pcs");
   const sourceUnitFactor = input.unitFactor && Number.isFinite(input.unitFactor) && input.unitFactor > 0 ? input.unitFactor : 1;
 
   if (input.price === null || input.price === undefined) {
@@ -141,7 +145,13 @@ export function normalizeExtractedQuote(input: {
     return { status: "failed", reason: "Price is invalid" };
   }
 
-  const sourceCurrency = (input.currency ?? "INR").toUpperCase() as CurrencyCode;
+  const sourceCurrency = (input.currency ?? "INR").toUpperCase();
+  if (!isSupportedCurrency(sourceCurrency) || !isSupportedCurrency(targetCurrency)) {
+    return {
+      status: "ambiguous",
+      reason: `Currency conversion is unavailable for ${!isSupportedCurrency(sourceCurrency) ? sourceCurrency : targetCurrency}`,
+    };
+  }
   const sourceUnit = canonicalUnit(input.unit ?? "pcs");
   const isMassToPiece = ["kg", "g", "lb"].includes(sourceUnit) && targetUnit === "pcs";
   if (isMassToPiece) {
