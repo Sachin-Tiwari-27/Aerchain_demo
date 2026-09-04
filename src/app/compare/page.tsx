@@ -36,6 +36,8 @@ interface PriceCell {
   sourceReference: string | null;
   conditions: string | null;
   failureReason: string | null;
+  rawQuote: Record<string, unknown> | null;
+  rawExtraction: Record<string, unknown> | null;
   status: string;
 }
 
@@ -133,12 +135,16 @@ export default function ComparePage() {
         const { data: vendorData } = await supabase.from("vendors").select("*");
         const { data: responseData } = await supabase
           .from("vendor_responses")
-          .select("vendor_id, status")
+          .select("id, vendor_id, status, raw_extraction")
           .eq("rfx_id", rfxId);
 
         const responseByVendor: Record<string, string> = {};
+        const responseById: Record<string, { rawExtraction: Record<string, unknown> | null }> = {};
         responseData?.forEach((r) => {
           responseByVendor[r.vendor_id] = r.status || "REVIEW";
+          responseById[r.id] = {
+            rawExtraction: r.raw_extraction as Record<string, unknown> | null,
+          };
         });
 
         const vendorList: Vendor[] = (vendorData || []).map((v) => ({
@@ -163,6 +169,10 @@ export default function ComparePage() {
             description: li.description || "—",
           })),
         );
+        const skuByLineItemId: Record<string, string> = {};
+        (lineItems || []).forEach((li) => {
+          skuByLineItemId[li.id] = li.sku;
+        });
         // Fetch vendor quotes
         const { data: quotes } = await supabase
           .from("vendor_quotes")
@@ -186,6 +196,14 @@ export default function ComparePage() {
             matrix[q.line_item_id] = {};
           }
           if (matrix[q.line_item_id][q.vendor_id]) return;
+          const response = responseById[q.vendor_response_id];
+          const rawExtraction = response?.rawExtraction ?? null;
+          const rawQuotes = Array.isArray(rawExtraction?.quotes) ? rawExtraction.quotes : [];
+          const rawQuote = rawQuotes.find((quote) => {
+            if (!quote || typeof quote !== "object") return false;
+            const candidate = quote as Record<string, unknown>;
+            return candidate.sku_reference === skuByLineItemId[q.line_item_id] || candidate.source_reference === q.source_reference;
+          });
           matrix[q.line_item_id][q.vendor_id] = {
             quoteId: q.id,
             price: q.normalized_price,
@@ -201,6 +219,8 @@ export default function ComparePage() {
             sourceReference: q.source_reference,
             conditions: q.conditions,
             failureReason: q.failure_reason,
+            rawQuote: rawQuote && typeof rawQuote === "object" ? rawQuote as Record<string, unknown> : null,
+            rawExtraction,
             status: q.validation_status || "UNKNOWN",
           };
         });
@@ -407,6 +427,14 @@ export default function ComparePage() {
                 <div><dt className="text-slate-500">Source reference</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.sourceReference ?? "Not recorded"}</dd></div>
                 {selectedEvidence.conditions ? <div><dt className="text-slate-500">Conditions</dt><dd className="mt-1 font-medium text-slate-900">{selectedEvidence.conditions}</dd></div> : null}
               </dl>
+              <div className="border-t border-slate-200 pt-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Raw extracted quote</p>
+                <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-100">{selectedEvidence.rawQuote ? JSON.stringify(selectedEvidence.rawQuote, null, 2) : "No matching raw quote was stored"}</pre>
+              </div>
+              <details className="border-t border-slate-200 pt-4">
+                <summary className="cursor-pointer text-sm font-semibold text-slate-700">Raw vendor extraction</summary>
+                <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-100">{selectedEvidence.rawExtraction ? JSON.stringify(selectedEvidence.rawExtraction, null, 2) : "No raw vendor extraction was stored"}</pre>
+              </details>
         </div>}
       </Drawer>
 
