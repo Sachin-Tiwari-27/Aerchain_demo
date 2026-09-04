@@ -208,15 +208,21 @@ export default function AskPage() {
             <div className="rounded-lg bg-slate-50 p-4">
               <p className="text-xs font-medium uppercase text-slate-600">Current Cost</p>
               <p className="mt-2 text-2xl font-bold text-slate-900">
-                ₹{(result.data?.summary?.totalCurrentCost || 0).toLocaleString("en-IN")}
+                {result.data?.summary?.baselineAvailable === false
+                  ? "Unavailable"
+                  : `₹${(result.data?.summary?.totalCurrentCost || 0).toLocaleString("en-IN")}`}
               </p>
             </div>
             <div className="rounded-lg bg-emerald-50 p-4">
               <p className="text-xs font-medium uppercase text-emerald-600">Savings</p>
               <p className="mt-2 text-2xl font-bold text-emerald-900">
-                ₹{(result.data?.summary?.totalSavings || 0).toLocaleString("en-IN")}
+                {result.data?.summary?.baselineAvailable === false
+                  ? "Unavailable"
+                  : `₹${(result.data?.summary?.totalSavings || 0).toLocaleString("en-IN")}`}
               </p>
-              <p className="mt-1 text-sm text-emerald-700">{result.data?.summary?.savingsPercent}%</p>
+              <p className="mt-1 text-sm text-emerald-700">
+                {result.data?.summary?.baselineAvailable === false ? "No baseline" : `${result.data?.summary?.savingsPercent}%`}
+              </p>
             </div>
             <div className="rounded-lg bg-slate-50 p-4">
               <p className="text-xs font-medium uppercase text-slate-600">Vendors Used</p>
@@ -228,6 +234,9 @@ export default function AskPage() {
               </p>
             </div>
           </div>
+          {result.data?.summary?.baselineMessage && (
+            <p className="mt-4 text-sm text-amber-700">{result.data.summary.baselineMessage}.</p>
+          )}
 
           {/* Constraints */}
           <div className="mt-6">
@@ -390,7 +399,9 @@ export default function AskPage() {
             <div className="rounded-lg bg-slate-50 p-4">
               <p className="text-xs font-medium uppercase text-slate-600">Current Spend</p>
               <p className="mt-2 text-2xl font-bold text-slate-900">
-                ₹{(result.data?.currentSpend || 0).toLocaleString("en-IN")}
+                {result.data?.baselineAvailable === false
+                  ? "Unavailable"
+                  : `₹${(result.data?.currentSpend || 0).toLocaleString("en-IN")}`}
               </p>
             </div>
             <div className="rounded-lg bg-slate-50 p-4">
@@ -402,11 +413,18 @@ export default function AskPage() {
             <div className="rounded-lg bg-emerald-50 p-4">
               <p className="text-xs font-medium uppercase text-emerald-600">Savings</p>
               <p className="mt-2 text-2xl font-bold text-emerald-900">
-                ₹{(result.data?.savings || 0).toLocaleString("en-IN")}
+                {result.data?.baselineAvailable === false
+                  ? "Unavailable"
+                  : `₹${(result.data?.savings || 0).toLocaleString("en-IN")}`}
               </p>
-              <p className="mt-1 text-sm text-emerald-700">{result.data?.savingsPercent}%</p>
+              <p className="mt-1 text-sm text-emerald-700">
+                {result.data?.baselineAvailable === false ? "No baseline" : `${result.data?.savingsPercent}%`}
+              </p>
             </div>
           </div>
+          {result.data?.baselineMessage && (
+            <p className="mt-4 text-sm text-amber-700">{result.data.baselineMessage}.</p>
+          )}
         </section>
       )}
 

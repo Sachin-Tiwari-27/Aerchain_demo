@@ -267,8 +267,13 @@ export async function runAwardScenario(
     });
 
     const totalSavings = totalCurrentCost - totalAwardCost;
+    const baselineAvailable =
+      Object.keys(awardByLineItem).length > 0 &&
+      Object.values(awardByLineItem).every((award: any) => award.currentPrice !== null);
     const savingsPercent =
-      totalCurrentCost > 0 ? ((totalSavings / totalCurrentCost) * 100).toFixed(1) : 0;
+      baselineAvailable && totalCurrentCost > 0
+        ? ((totalSavings / totalCurrentCost) * 100).toFixed(1)
+        : null;
 
     // Check vendor concentration
     const vendorCounts: Record<string, number> = {};
@@ -306,9 +311,13 @@ export async function runAwardScenario(
         award: awardByLineItem,
         summary: {
           totalAwardCost: Math.round(totalAwardCost),
-          totalCurrentCost: Math.round(totalCurrentCost),
-          totalSavings: Math.round(totalSavings),
+          totalCurrentCost: baselineAvailable ? Math.round(totalCurrentCost) : null,
+          totalSavings: baselineAvailable ? Math.round(totalSavings) : null,
           savingsPercent,
+          baselineAvailable,
+          baselineMessage: baselineAvailable
+            ? null
+            : "Current contract baseline is unavailable for all awarded SKUs",
           vendorsUsed,
           concentrationPercent,
           constraintsSatisfied: constraints,
@@ -381,17 +390,28 @@ export async function calculateSavingsView(
       totalCurrentCost += (contractMap[li.id] || 0) * quantity;
     });
 
-    const savings = totalCurrentCost - totalAwardCost;
+    const baselineAvailable =
+      (lineItems || []).some((li: any) => comparableQuotes.some((q: any) => q.line_item_id === li.id)) &&
+      (lineItems || [])
+        .filter((li: any) => comparableQuotes.some((q: any) => q.line_item_id === li.id))
+        .every((li: any) => contractMap[li.id] !== undefined);
+    const savings = baselineAvailable ? totalCurrentCost - totalAwardCost : null;
 
     return {
       toolName: "calculate_savings",
       success: true,
       data: {
         scenario,
-        currentSpend: Math.round(totalCurrentCost),
+        currentSpend: baselineAvailable ? Math.round(totalCurrentCost) : null,
         proposedSpend: Math.round(totalAwardCost),
-        savings: Math.round(savings),
-        savingsPercent: ((savings / totalCurrentCost) * 100).toFixed(1),
+        savings: savings === null ? null : Math.round(savings),
+        savingsPercent: savings === null || totalCurrentCost <= 0
+          ? null
+          : ((savings / totalCurrentCost) * 100).toFixed(1),
+        baselineAvailable,
+        baselineMessage: baselineAvailable
+          ? null
+          : "Current contract baseline is unavailable for the comparable SKUs",
       },
     };
   } catch (err) {

@@ -353,6 +353,35 @@ test("fails only mismatched specification lines and retains the vendor's eligibl
   assert.equal(result.issues.some((issue) => issue.issueType === "MANDATORY_SPEC_MISMATCH"), true);
 });
 
+test("treats missing optional technical specifications as neutral", async () => {
+  const result = await processExtractedQuotes({
+    vendorId: "vendor-1",
+    vendorResponseId: "response-1",
+    rfxId: "rfx-1",
+    extraction: {
+      vendor: "Partial Spec Vendor",
+      lead_time_days: 7,
+      quotes: [{ sku_reference: "CP-001", price: 12.6, unit: "pcs", currency: "INR", conditions: null, confidence: null }],
+      questionnaire_answers: [],
+      commercial_terms: [],
+      exceptions: [],
+    },
+    lineItems: [{
+      id: "line-1",
+      rfx_id: "rfx-1",
+      sku: "CP-001",
+      annual_quantity: 100,
+      ply: 3,
+      gsm: 300,
+      bursting_strength: 5.2,
+      bursting_strength_unit: "kPa",
+    }],
+  });
+
+  assert.equal(result.processedQuotes[0].validationStatus, "VALID");
+  assert.equal(result.processedQuotes[0].failureReason, null);
+});
+
 test("handles complete, partial, vague, mixed-unit, and late vendor response fixtures conservatively", async () => {
   const lines = [
     { id: "1", rfx_id: "rfx", sku: "CP-001", description: "3-ply mailer box", unit: "pcs", annual_quantity: 15000, ply: 3 },

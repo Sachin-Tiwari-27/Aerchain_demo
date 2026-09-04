@@ -102,12 +102,14 @@ function validateMandatorySpecifications(
   quote: { ply?: SpecificationValue; gsm?: SpecificationValue; bursting_strength?: SpecificationValue; bursting_strength_unit?: string | null; length_mm?: SpecificationValue; width_mm?: SpecificationValue; height_mm?: SpecificationValue },
 ): SpecificationValidation {
   const mismatches: string[] = [];
-  const unstated: string[] = [];
   const compareNumber = (label: string, required: SpecificationValue, quoted: SpecificationValue, unit = "") => {
-    if (required === null || required === undefined) return;
-    if (quoted === null || quoted === undefined) {
-      unstated.push(`${label}: required ${formatSpecification(required, unit)}, quoted not stated`);
-    } else if (Number(required) !== Number(quoted)) {
+    if (
+      required === null ||
+      required === undefined ||
+      quoted === null ||
+      quoted === undefined
+    ) return;
+    if (Number(required) !== Number(quoted)) {
       mismatches.push(`${label}: required ${formatSpecification(required, unit)}, quoted ${formatSpecification(quoted, unit)}`);
     }
   };
@@ -116,10 +118,9 @@ function validateMandatorySpecifications(
   compareNumber("GSM", lineItem.gsm, quote.gsm, " GSM");
   const burstingUnit = lineItem.bursting_strength_unit ? ` ${lineItem.bursting_strength_unit}` : "";
   compareNumber("bursting strength", lineItem.bursting_strength, quote.bursting_strength, burstingUnit);
-  if (lineItem.bursting_strength && lineItem.bursting_strength_unit && !quote.bursting_strength_unit) {
-    unstated.push(`bursting strength unit: required ${lineItem.bursting_strength_unit}, quoted not stated`);
-  } else if (
+  if (
     lineItem.bursting_strength !== null && lineItem.bursting_strength !== undefined &&
+    quote.bursting_strength !== null && quote.bursting_strength !== undefined &&
     lineItem.bursting_strength_unit &&
     quote.bursting_strength_unit?.trim().toLowerCase() !== lineItem.bursting_strength_unit.trim().toLowerCase()
   ) {
@@ -130,7 +131,6 @@ function validateMandatorySpecifications(
   compareNumber("height", lineItem.height_mm, quote.height_mm, " mm");
 
   if (mismatches.length > 0) return { status: "failed", reason: `${sku}: ${mismatches.join("; ")}` };
-  if (unstated.length > 0) return { status: "review", reason: `${sku}: ${unstated.join("; ")}` };
   return { status: "pass", reason: null };
 }
 
@@ -369,16 +369,6 @@ export async function processExtractedQuotes(input: {
         issueType: "MANDATORY_SPEC_MISMATCH",
         severity: "ERROR",
         message: failureReason,
-      });
-    }
-
-    if (specificationValidation.status === "review" && validationStatus === "VALID") {
-      validationStatus = "AMBIGUOUS";
-      failureReason = specificationValidation.reason;
-      issues.push({
-        issueType: "MANDATORY_SPEC_NOT_STATED",
-        severity: "WARNING",
-        message: specificationValidation.reason ?? `${mapped.sku}: Mandatory specification was not stated by vendor`,
       });
     }
 
